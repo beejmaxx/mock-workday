@@ -1,6 +1,6 @@
 # Mock Workday: proposed plan (Claude)
 
-**Status:** proposal for review. Nothing here is implemented. Statements about Workday are labeled; anything not yet checked against primary Workday documentation is marked *unverified*.
+**Status:** proposal for review. Nothing here is implemented. Statements about Workday are labeled. Verification results and sources are in [workday-verification.md](workday-verification.md).
 
 **North star:** Mock Workday is a protected multi-tenant system containing:
 
@@ -128,7 +128,7 @@ A compromised caller is limited to the grants it currently holds; it cannot act 
 
 ## 2. Minimal HCM graph (Workday-inspired)
 
-- **Supervisory organizations:** a hierarchy with manager role assignments. Per Workday (*unverified*), a manager is not a member of the org containing their direct reports.
+- **Supervisory organizations:** a hierarchy with manager role assignments. Per Workday (verified), a manager is not a member of the org they manage.
 - **Position Management:** positions exist independently of workers, can be open or filled, and carry organization assignments and roles even when vacant.
 - **Workers:** fill positions and carry business reference IDs alongside opaque object IDs.
 - **Effective-dated job and compensation:**
@@ -136,7 +136,7 @@ A compromised caller is limited to the grants it currently holds; it cannot act 
   - "Current" means the latest row effective as of a given date.
   - Future-dated changes work without a scheduler.
   - Tests use a controllable clock.
-- **API shape:** related objects are returned as references (`{id, descriptor, href}`) in the style of Workday's public APIs (*unverified*).
+- **API shape:** related objects are returned as references (`{id, descriptor, href}`) in the style of Workday's public APIs (verified, secondary sources).
 - **Deferred:** company and cost center, job profiles, and worker types.
 
 ## 3. Security (Workday-inspired)
@@ -151,7 +151,10 @@ principal -> role assignments / self / integration group
 ### Model
 
 - **Security groups:** EmployeeAsSelf, Manager, HR Partner, Compensation Partner, plus integration security groups.
-- **Role constraints:** roles are assigned to positions on organizations. Access applies to that organization and, where configured, its subordinates.
+- **Role constraints:** roles are assigned to positions on organizations.
+- **Access rights to organizations (verified; set per security group, not per assignment):** `CURRENT_ONLY`, `ALL_SUBORDINATES`, or `UNASSIGNED_SUBORDINATES` (subordinate orgs where nobody holds the same role).
+  - **Lab policy (decided):** Manager uses `ALL_SUBORDINATES`; HR Partner uses `UNASSIGNED_SUBORDINATES`.
+  - Result: Alice sees Grace in Platform even though Frank manages it. Carol does not see Grace, because Henry is Platform's HR Partner.
 - **Domains:**
   - worker basic data
   - worker organizations
@@ -395,6 +398,7 @@ Acme:   Dana (CEO, Executive)
           │    └─ Frank (Manager, Platform) └─ Grace
           └─ Priya (Manager, Finance)
         Carol (HR Partner assigned on Engineering and Finance; sits in HR)
+        Henry (HR Partner assigned on Platform; sits in HR)
         Connie (Compensation Partner assigned on Engineering and Finance)
 Globex: Dave (Manager) └─ Eve
 ```
@@ -430,16 +434,5 @@ Globex: Dave (Manager) └─ Eve
 
 ## Before the detailed spec
 
-1. Verify the Workday claims the design depends on against primary documentation:
-   - role-assignment inheritance
-   - manager membership semantics
-   - business-process security actions and statuses
-   - ISU and API-client authentication with scopes
-   - effective dating
-   - process history and audit features
-   - public object and reference shapes
-2. Resolve subordinate inheritance after verification.
-   - Workday appears to configure this on the role-based security group, with an option like "current organization and unassigned subordinates" (*unverified*).
-   - If so, Alice's Manager access might not extend to Platform, where Frank holds the Manager role. That would change the seed test "Alice sees Grace."
-   - Model it as a security-group setting and choose the value once verified.
-3. Write the detailed spec and test matrix. Implementation starts only after approval.
+1. ~~Verify the Workday claims~~ Done: see [workday-verification.md](workday-verification.md). Subordinate access is resolved above.
+2. Write the detailed spec and test matrix. Implementation starts only after approval.
