@@ -408,3 +408,26 @@ after confirmed republication. Unknown results remain for retry. Inspect DLQ
 failure attributes before redriving; no automatic redrive, SNS or consumer-side
 queue is added. A successful PutEvents result does not prove target delivery;
 checkpoint 4 must verify the bus exists and inspect target/DLQ behavior.
+
+### Native AI (M3 slice 2d)
+
+`POST /api/v1/ai/worker-summary`, `/team-summary`, `/document-qa` and `/generate`
+use current caller permissions before assembling model input, then recheck them
+before returning advisory text. See [the AI contract](docs/spec.md#68-native-ai-and-metering-workday-inspired-features-lab-policy-implementation)
+and [OpenAPI](docs/openapi.json) for bodies, sources and limits. Fresh disposable
+schema installation is required for the AI ledger tables and seed entitlements.
+
+Local runs default to `MW_AI_BACKEND=fake`: fixed output/usage, no cloud access.
+Pytest forces this mode; Bedrock contract tests use Stubber. An ordinary human
+login can try `{"prompt":"Write a synthetic greeting"}` at `/api/v1/ai/generate`.
+Integrations need explicit `ai` scope, membership in `Native AI Callers`, and
+separate data permissions; delegates use their human's current entitlements.
+Existing client ceilings do not gain AI access automatically.
+
+The PostgreSQL ledger reserves budget before inference, counts uncertain calls
+conservatively and recovers stale concurrency leases after 60 seconds. Logs and
+EMF contain IDs, timing and usage, never prompt/answer content. `MW_AI_BACKEND=bedrock`
+uses the task role and the approved Nova Micro US profile; enable it only during
+approved AWS deployment. IAM, dashboard/alarms, log retention and live model
+access verification remain checkpoint-3/4 work. No AWS resources were created
+for slice 2d.

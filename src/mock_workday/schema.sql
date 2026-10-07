@@ -188,7 +188,7 @@ CREATE TABLE integration_group_orgs (
 );
 CREATE TABLE domain_grants (
     tenant_id uuid NOT NULL REFERENCES tenants,
-    domain text NOT NULL CHECK (domain IN ('WORKER_BASIC','WORKER_ORGANIZATIONS','WORKER_COMPENSATION','ABSENCE','DOC_TENANT','DOC_ORG','DOC_WORKER')),
+    domain text NOT NULL CHECK (domain IN ('WORKER_BASIC','WORKER_ORGANIZATIONS','WORKER_COMPENSATION','ABSENCE','DOC_TENANT','DOC_ORG','DOC_WORKER','AI_USE')),
     group_id uuid NOT NULL,
     permission text NOT NULL CHECK (permission IN ('VIEW','MODIFY')),
     PRIMARY KEY (tenant_id, domain, group_id),
@@ -653,3 +653,67 @@ CREATE POLICY tenant_isolation ON event_outbox
     WITH CHECK (tenant_id=current_setting('app.tenant_id')::uuid);
 GRANT SELECT, INSERT ON event_outbox TO mw_app;
 GRANT UPDATE (attempt_count,next_attempt_at,published_at,last_error) ON event_outbox TO mw_app;
+
+CREATE TABLE ai_usage_daily (
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    day date NOT NULL,
+    attempts int NOT NULL DEFAULT 0 CHECK(attempts>=0),
+    input_tokens bigint NOT NULL DEFAULT 0 CHECK(input_tokens>=0),
+    output_tokens bigint NOT NULL DEFAULT 0 CHECK(output_tokens>=0),
+    PRIMARY KEY(tenant_id,day)
+);
+CREATE TABLE ai_invocations (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    day date NOT NULL,
+    request_id text NOT NULL,
+    account_id uuid NOT NULL,
+    client_id text,
+    grant_id uuid,
+    asu_id uuid,
+    credential_version_id uuid,
+    by_user_account_id uuid NOT NULL,
+    on_behalf_of_user_account_id uuid,
+    model text NOT NULL CHECK(model='mw-small-text-v1'),
+    template_version text NOT NULL,
+    prompt_sha256 text NOT NULL,
+    sources jsonb NOT NULL,
+    state text NOT NULL CHECK(state IN ('RESERVED','DISPATCHED','SUCCEEDED','FAILED','UNKNOWN','CANCELED')),
+    active boolean NOT NULL,
+    created_at timestamptz NOT NULL,
+    lease_until timestamptz NOT NULL,
+    input_tokens bigint NOT NULL CHECK(input_tokens>=0),
+    output_tokens bigint NOT NULL CHECK(output_tokens>=0),
+    FOREIGN KEY(tenant_id,by_user_account_id) REFERENCES accounts(tenant_id,id),
+    FOREIGN KEY(tenant_id,on_behalf_of_user_account_id) REFERENCES accounts(tenant_id,id),
+    FOREIGN KEY(tenant_id,day) REFERENCES ai_usage_daily(tenant_id,day),
+    FOREIGN KEY(tenant_id,account_id) REFERENCES accounts(tenant_id,id),
+    FOREIGN KEY(tenant_id,client_id) REFERENCES api_clients(tenant_id,client_id),
+    FOREIGN KEY(tenant_id,grant_id) REFERENCES delegation_grants(tenant_id,id),
+    FOREIGN KEY(tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id),
+    FOREIGN KEY(tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id),
+    UNIQUE(tenant_id,id)
+);
+CREATE TABLE audit_ai (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    invocation_id uuid NOT NULL,
+    phase text NOT NULL,
+    at timestamptz NOT NULL,
+    metadata jsonb NOT NULL,
+    FOREIGN KEY(tenant_id,invocation_id) REFERENCES ai_invocations(tenant_id,id)
+);
+ALTER TABLE ai_usage_daily ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_usage_daily FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON ai_usage_daily USING(tenant_id=current_setting('app.tenant_id')::uuid) WITH CHECK(tenant_id=current_setting('app.tenant_id')::uuid);
+ALTER TABLE ai_invocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_invocations FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON ai_invocations USING(tenant_id=current_setting('app.tenant_id')::uuid) WITH CHECK(tenant_id=current_setting('app.tenant_id')::uuid);
+ALTER TABLE audit_ai ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_ai FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON audit_ai USING(tenant_id=current_setting('app.tenant_id')::uuid) WITH CHECK(tenant_id=current_setting('app.tenant_id')::uuid);
+GRANT SELECT,INSERT ON ai_usage_daily,ai_invocations,audit_ai TO mw_app;
+GRANT UPDATE(attempts,input_tokens,output_tokens) ON ai_usage_daily TO mw_app;
+GRANT UPDATE(state,active,input_tokens,output_tokens) ON ai_invocations TO mw_app;
+
+CREATE INDEX ai_active_leases ON ai_invocations(tenant_id,lease_until) WHERE active;

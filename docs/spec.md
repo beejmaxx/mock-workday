@@ -16,7 +16,8 @@ Unlabeled statements are implementation choices.
 - **M2:** §5 (business processes), §6.4 (idempotency), fault injection in §9, the M2 seed addition, and the M2 tests in §11.
 - **M3 slice 2a:** tenant storage and STS sessions, bulk-v1 seeding and balance snapshots.
 - **M3 slice 2b:** ASU identity, credential verification, attribution and request logs (§3.6).
-- **M3 slice 2c:** report exports (§6.7) and transactional business notifications (§5.7). Native AI and AWS infrastructure follow [m3-spec.md](m3-spec.md).
+- **M3 slice 2c:** report exports (§6.7) and transactional business notifications (§5.7).
+- **M3 slice 2d:** native AI, durable usage reservations and EMF (§6.8). AWS infrastructure remains checkpoint 3/4 in [m3-spec.md](m3-spec.md).
 
 ---
 
@@ -323,6 +324,7 @@ class Principal:
 | `compensation` | WORKER_COMPENSATION; required, in addition to `staffing`, for a Change Job that changes compensation |
 | `absence` | ABSENCE, Request Time Off |
 | `documents` | all document domains |
+| `ai` | AI_USE (native AI invocation); data scopes remain separately required |
 
 ---
 
@@ -433,6 +435,7 @@ retention are checkpoint-3/4 infrastructure work, not a local-test assertion.
 ### 4.1 Domains and permissions [WD-inspired]
 
 - **Domains:**
+  - `AI_USE` (tenant-wide VIEW to invoke native AI; scope `ai`; lab policy)
   - `WORKER_BASIC`
   - `WORKER_ORGANIZATIONS`
   - `WORKER_COMPENSATION`
@@ -903,9 +906,9 @@ continues to make no balance changes. No balance write endpoint is added.
 | 403 | `FORBIDDEN` |
 | 404 | `NOT_FOUND`, `TENANT_NOT_FOUND` |
 | 409 | `VERSION_CONFLICT`, `PENDING_CHANGE_EXISTS`, `EFFECTIVE_DATE_PASSED`, `POSITION_OCCUPIED`, `INVALID_STATE` |
-| 422 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REUSED`, `REPORT_TOO_LARGE` |
-| 429 | `RATE_LIMITED` |
-| 503 | `AUDIT_UNAVAILABLE`, `SERVICE_UNAVAILABLE` (dependency failure or injected status fault) |
+| 422 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REUSED`, `REPORT_TOO_LARGE`, `AI_CONTEXT_TOO_LARGE` |
+| 429 | `RATE_LIMITED`, `AI_LIMIT_EXCEEDED` |
+| 503 | `AUDIT_UNAVAILABLE`, `AI_UNAVAILABLE`, `SERVICE_UNAVAILABLE` (dependency failure or injected status fault) |
 | 504 | `SIMULATED_LOST_RESPONSE` (fault injection only) |
 
 ---
@@ -980,6 +983,109 @@ app access is SELECT/INSERT only. Owner-only `python -m mock_workday.reports
 --tenant UUID` clears local bodies older than one day, retaining disclosure
 metadata. Terraform checkpoint 3 adds a one-day S3 lifecycle backstop for export
 prefixes (asynchronous storage cleanup, not access TTL); teardown empties them.
+
+### 6.8 Native AI and metering [Workday-inspired features; lab policy implementation]
+
+The published Workday AI feature references and approved model/location/cost
+choices are in [M3 §7.1–7.2](m3-spec.md#71-tenant-scoped-native-ai-j). These
+interfaces and their Bedrock implementation are lab choices, not Workday internals.
+All four synchronous POST endpoints require AI_USE VIEW on a tenant-wide target,
+plus `ai` for scoped callers. ASU operation ceilings distinguish each operation.
+All Employees and the new initially empty `Native AI Callers` unconstrained
+integration group receive AI_USE VIEW. No existing client gains `ai` implicitly;
+its operator must extend its ceiling and the human must create a suitable grant.
+The group adds no enterprise-data authority. Existing small fixture workers,
+documents, credentials and clients stay unchanged; seed security groups/grants
+are extended in both small and bulk seeds (manifest hashes reflect these rows).
+
+| Path under `/api/v1/ai` | Body | Data authorization |
+|---|---|---|
+| `/worker-summary` | `worker_id`, optional `as_of`, `include_compensation=false` | Current WORKER_BASIC reach, `staffing` scope; omit compensation unless currently authorized with `compensation` scope |
+| `/team-summary` | `org_id`, optional `as_of`, `include_subordinates=false`, `include_compensation=false` | Current visible workers only; same fields/scopes as above; 422 above 50 visible workers |
+| `/document-qa` | `question`, 1–8 `document_ids` | Authorize every distinct explicit document before reading any body; normal domain plus `documents` scope; whole request 404 on denied/missing source |
+| `/generate` | `prompt`, `model="mw-small-text-v1"` | Caller text only, no server retrieval |
+
+Extra body properties are rejected. There are no caller-selected system messages,
+tools, URLs to fetch, provider ARNs or inference parameters. Duplicate document
+IDs collapse to one source. Existing current reach applies even with historical
+`as_of`. Document authorization does not redact salary already copied into an
+authorized free-text document (§7 composition gap).
+
+The sole alias maps to `us.amazon.nova-micro-v1:0` using synchronous Converse,
+Standard tier (default), maxTokens 512, temperature 0. The service IAM role supplies
+credentials; no caller keys. Reuse one lazy client, source region us-east-2,
+connect timeout 5s, read timeout 30s, total_max_attempts 1; no fallback, streaming,
+cache, tools or provider retry. The approved US cross-region processing exception
+still applies. The entire UTF-8 system-plus-JSON input is limited to 65,536 bytes
+(422 `AI_CONTEXT_TOO_LARGE`). Documents are untrusted JSON source data with fixed
+server source IDs. Instructions in them confer no authority. Q&A instructions
+require abstention when context does not support an answer.
+
+Return `text` (advisory), `sources` (`resource`, `id`, `source_id`, included `fields`),
+`model`, `invocation_id`, `usage` (`input_tokens`, `output_tokens`) and `request_id`.
+References come from the server, never from model-generated citations or links.
+An empty visible team returns `No visible source workers.`, null invocation ID,
+empty sources and zero usage without reserving budget or invoking a model.
+
+Append-only `audit_ai` and FORCE-RLS `ai_invocations`/`ai_usage_daily` are the
+metering authority. Before dispatch, commit an ATTEMPT audit and reservation with
+tenant, account/client/grant/ASU/credential and By User/OBO IDs, source IDs/field
+names, template version, SHA-256 of system+prompt, alias and request ID. Never
+persist raw prompts/answers. Audit failure is 503 and prevents inference. A second
+short transaction commits DISPATCHED before the network call; no transaction is
+held across inference. The dispatch marker may survive a crash just before the
+actual call, deliberately charging conservatively rather than undercounting.
+
+Limits per tenant UTC **wall-clock** day: 100 attempted calls, 1,000,000 input and
+100,000 output tokens; two outstanding calls across all days. Reserve 131,072
+input and 512 output tokens per call under a tenant advisory lock followed by a
+day-row FOR UPDATE lock. All ledger transitions acquire the same tenant lock;
+leases from yesterday still count until resolved. Reject with 429
+`AI_LIMIT_EXCEEDED`, `Retry-After: 60` (a suggested retry interval, not a promised
+quota reset). Use wall time independent of the frozen business clock.
+
+Results and settlement commit atomically: SUCCEEDED charges actual usage, known
+pre-generation provider rejection (access/validation/throttling/not-found) is
+FAILED with zero tokens but counts the attempt. Uncertain errors/timeouts retain
+the full charge as UNKNOWN. No retry. After 60s, stale DISPATCHED leases become
+UNKNOWN and free concurrency only; stale RESERVED calls that never committed a
+dispatch marker become CANCELED and refund tokens and the attempt. Client setup
+failure also cancels. Result-audit failure returns 503 and retains the reservation.
+A subsequent accepted request reaps leases; a denied reservation rolls back its
+reaping too. Late actual usage can settle an UNKNOWN record once, on its original
+day. Completed calls cannot settle twice. Operators can run the same `ai_usage.reap`
+function within a tenant transaction and tenant advisory lock for bounded lab repair.
+
+After settlement, reauthenticate and reauthorize AI_USE and every included data
+source/field in a fresh transaction before returning. This includes grant/account,
+ASU credential/operation changes. A denial discards the answer but retains spent
+usage; it cannot retract data already sent. Sensitive source access stays audited.
+
+`MW_AI_BACKEND=fake|bedrock` defaults to fake. The plain fake function accepts
+exact system/prompt arguments for test spies, returns deterministic source-ID
+text (Q&A abstains) and fixed 64/16 usage, and performs no network calls. Pytest
+forces fake; provider contract tests use Stubber only. Test failure hooks use
+monkeypatch, not new flags. Bedrock full prompt/response logging stays off.
+
+JSON stdout records dispatched/succeeded/failed/unknown invocation IDs and request
+IDs without exception messages, prompts, answers or credentials. EMF shares that
+pipeline: namespace `MockWorkday`, Service `mock-workday`, Environment `dev`,
+wall-clock epoch-ms `_aws.Timestamp`, StorageResolution 60. No SDK or collector.
+Exactly one dimension set per record:
+
+| Dimensions | Metrics (units) |
+|---|---|
+| `[Service,Environment]` | RequestCount, AuthorizationDenials, ServerErrors, BedrockFailures (Count); LatencyMs (Milliseconds) |
+| `[Service,Environment,TenantId]` | BedrockInputTokens, BedrockOutputTokens, AILimitDenials (Count) |
+
+Denials count requests with 401/403 responses or a rejected permission check,
+including masked 404s and field omissions on a successful response, not hidden list rows. Latency includes handler I/O; unknown preroute duration emits no sample.
+Tenant dimensions use only resolved tenant UUIDs; request ID is a property, never
+a dimension. Fake usage uses the same metric shape for local verification. Unknown
+reservations do not emit fabricated token counts. At five tenants there are 20
+potential series ($6/month at $0.30 each); local stdout alone incurs no AWS cost.
+The single dashboard, six alarms, encrypted 3-day CloudWatch retention and Bedrock
+IAM/model-access smoke remain checkpoint-3/4 work, not claims of deployment.
 
 ## 7. Documents
 
@@ -1465,6 +1571,18 @@ CloudWatch retention/encryption and live IAM enforcement remain checkpoint-3/4 c
 
 Local/stub tests prove protocol and transaction behavior. S3 lifecycle, actual
 cross-domain filtering, DLQ policies/KMS/alarms remain checkpoint-3/4 proofs.
+
+### M3 slice 2d: native AI, usage and EMF
+
+| Test ID | Required check |
+|---|---|
+| T-M3-AI-01 | AI_USE/scopes/ASU operation ceilings; hidden workers/documents/salary absent from fake input; cross-tenant, oversized context and visible team >50 rejected before dispatch |
+| T-M3-AI-02 | Injection/control sources; reject model/system/tool overrides; advisory output performs no actions; empty-team/no-answer behavior |
+| T-M3-AI-03 | Concurrent and daily limits; actual settlement; 429; midnight and lease recovery; timeout/crash charged; audit failure before/after dispatch; predispatch refund; no double settlement |
+| T-M3-AI-04 | Mid-call identity/grant/object revocation discards answer but charges usage; append-only attribution audit; no prompt/answer/credentials in logs |
+| T-M3-AI-05 | Deterministic fake and no AWS in tests; stubbed exact Converse profile/config; approved live smoke later verifies IAM/regions/model access without fallback |
+| T-M3-M-01 | Valid EMF JSON, units, wall time, exact dimensions and 20 baseline series; deployment plan later proves dashboard/alarms/retention and metric-history leftovers |
+
 
 ## 12. Reproducible, disposable environments [Lab requirement]
 

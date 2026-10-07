@@ -163,6 +163,7 @@ def authorize(conn, p, action, domain, target, now):
             "WORKER_ORGANIZATIONS": "staffing",
             "WORKER_COMPENSATION": "compensation",
             "ABSENCE": "absence",
+            "AI_USE": "ai",
         }[domain]
     )
     if p.scopes is not None and scope not in p.scopes:

@@ -15,6 +15,10 @@ from .errors import APIError
 
 OPERATIONS = frozenset(
     (
+        "worker_summary_api_v1_ai_worker_summary_post",
+        "team_summary_api_v1_ai_team_summary_post",
+        "document_qa_api_v1_ai_document_qa_post",
+        "generate_api_v1_ai_generate_post",
         "create_export_api_v1_report_exports_post",
         "list_workers_api_v1_workers_get",
         "get_worker_api_v1_workers__wid__get",
@@ -38,7 +42,7 @@ OPERATIONS = frozenset(
         "cancel_api_v1_business_process_events__wid__cancel_post",
     )
 )
-SCOPES = frozenset(("staffing", "compensation", "absence", "documents"))
+SCOPES = frozenset(("staffing", "compensation", "absence", "documents", "ai"))
 JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 OBO = "urn:ietf:params:oauth:grant-type:token-exchange"
 

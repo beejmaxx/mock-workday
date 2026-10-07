@@ -1,8 +1,10 @@
+import os
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from secrets import token_bytes
+from threading import Lock
 
 from . import audit
 from .auth import Principal, authenticate
@@ -23,6 +25,7 @@ class Context:
     p: Principal
     now: datetime
     request_id: str
+    request_state: object = None
     uploaded_documents: list = field(default_factory=list)
     uploaded_exports: list = field(default_factory=list)
 
@@ -51,6 +54,8 @@ class Context:
 
     def record_decision(self, action, domain, target, decision, *, sensitive=False):
         if not decision.allowed:
+            if self.request_state is not None:
+                self.request_state.authorization_denied = True
             audit.denial(
                 self.service.db,
                 self.p,
@@ -135,6 +140,12 @@ class Service:
         self.cursor_secret = token_bytes(32)
         self.export_secret = token_bytes(32)
         self.event_capture = deque(maxlen=1000)
+        self.ai_backend = os.getenv("MW_AI_BACKEND", "fake")
+        if self.ai_backend not in ("fake", "bedrock"):
+            raise ValueError("MW_AI_BACKEND must be fake or bedrock")
+        self.ai_clock = lambda: datetime.now(UTC)
+        self.ai_client = None
+        self.ai_client_lock = Lock()
 
     def tenant(self, request):
         host = request.headers.get("host", "").split(":", 1)[0].lower()
@@ -148,7 +159,7 @@ class Service:
         return tenant
 
     @contextmanager
-    def request(self, request, *, snapshot=False):
+    def request(self, request, *, snapshot=False, recheck=False):
         tenant = self.tenant(request)
         now = self.clock.now()
         uploaded = []
@@ -188,9 +199,14 @@ class Service:
                         now,
                     )
                     raise APIError(403, "FORBIDDEN")
-                self.rate_limits.check(p, now)
-                rules = self.faults.take(
-                    tenant["id"], request.method, request.url.path, p.client_id
+                if not recheck:
+                    self.rate_limits.check(p, now)
+                rules = (
+                    []
+                    if recheck
+                    else self.faults.take(
+                        tenant["id"], request.method, request.url.path, p.client_id
+                    )
                 )
                 info = conn.info
                 try:
@@ -202,6 +218,7 @@ class Service:
                         p,
                         now,
                         request_id(request),
+                        request.state,
                         uploaded,
                         exports,
                     )

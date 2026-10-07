@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
 from .errors import APIError, request_id
+from .metrics import request_metrics
 
 logger = logging.getLogger("mock_workday.requests")
 
@@ -63,10 +64,17 @@ def request_log(request: Request, response: Response):
                 ),
             )
         logger.info(json.dumps(record))
+        request_metrics(
+            record["status"],
+            record["duration_ms"],
+            rid,
+            authorization_denied=getattr(request.state, "authorization_denied", False),
+        )
 
 
 def early_failure(request, status, code):
     if not getattr(request.state, "log_started", False):
+        request_metrics(status, None, request_id(request))
         logger.info(
             json.dumps(
                 {

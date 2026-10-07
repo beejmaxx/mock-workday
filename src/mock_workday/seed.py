@@ -39,6 +39,7 @@ ROLES = [
     ("COMPENSATION_PARTNER", "SO-FIN", "P-COMP-1"),
 ]
 GROUPS = [
+    ("Native AI Callers", "INTEGRATION_UNCONSTRAINED", None, None),
     ("Employee as Self", "SELF", None, None),
     ("All Employees", "ALL_EMPLOYEES", None, None),
     ("Manager", "ROLE_BASED", "MANAGER", "ALL_SUBORDINATES"),
@@ -48,6 +49,7 @@ GROUPS = [
     ("Integration: Engineering Reader", "INTEGRATION_CONSTRAINED", None, None),
 ]
 GRANTS = {
+    "AI_USE": {"All Employees": "VIEW", "Native AI Callers": "VIEW"},
     "WORKER_BASIC": {
         "Employee as Self": "VIEW",
         "Manager": "VIEW",

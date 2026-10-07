@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
 from starlette.exceptions import HTTPException
 
-from .api import admin, bp, documents, grants, identity, oauth, reports, workers
+from .api import admin, ai, bp, documents, grants, identity, oauth, reports, workers
 from .api.models import ErrorBody
 from .config import APP_URL, OWNER_URL
 from .db import Database
@@ -55,6 +55,7 @@ def create_apps(db, *, test_admin=False):
     public.include_router(reports.download_router)
     bearer = HTTPBearer(auto_error=False)
     for router in (
+        ai.router,
         grants.router,
         workers.router,
         documents.router,

@@ -915,8 +915,13 @@ after dispatch keeps the token reservation charged as unknown, never as zero.
 After a 60-second lease, a subsequent request/operator repair releases only its
 concurrency slot, not its charged budget. No queue/scheduler, no automatic
 Converse retry that might double-spend. A failure before dispatch releases the
-token reservation. If post-call audit/settlement fails, return 503 and retain
-the reservation. Inference calls use a 30-second timeout. Local deterministic
+token reservation and attempted-call count. Expired RESERVED records also refund;
+expired DISPATCHED records keep their charge. A committed dispatch marker followed
+by a crash before the network call is conservatively unknown. Known provider
+access/validation/throttling/not-found rejection counts the attempt with zero
+tokens. Late actual usage settles an UNKNOWN record once on its original day.
+If post-call audit/settlement fails, return 503 and retain the reservation.
+Inference calls use a 30-second read timeout and 5-second connection timeout. Local deterministic
 tests use an injected clock for ledger/lease behavior; AWS metering uses wall
 time, not the frozen business clock.
 
@@ -931,8 +936,9 @@ is required. Permission filtering is the security boundary; a prompt is not.
 **[Lab policy] Deterministic test mode:** `MW_AI_BACKEND=fake|bedrock`, default
 `fake` for local/pytest and explicit `bedrock` only in approved AWS deployment.
 This is the sole named AI backend configuration, not an extra feature flag.
-A plain fake-model function records the exact supplied context, returns fixed
-source-based text and fixed usage, and supports failure/timeout fixtures by
+A plain fake-model function exposes exact system/prompt arguments to test spies
+without persisting them; it returns fixed source-ID text (Q&A abstains) and
+64/16 usage, and supports failure/timeout fixtures by
 pytest monkeypatch. Tests never call AWS, including token counting. Exercise
 injection documents as inert content, hidden salary sentinels absent from the
 prompt, cross-tenant source rejection, and no tools/network actions even when
@@ -1260,6 +1266,15 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D43 — I: Repeatable-read synchronous NDJSON, private temporary file, bounded single S3 PutObject; local bounded DB bytes and process-signed capability | Multipart transfers, background report jobs or local filesystem object service | A 16-MiB cap fits one request and avoids multipart cleanup or another service; existing authorization applies to a coherent snapshot and local restart safely invalidates URLs |
 | D44 — G: BP history UUID is transition identity; one in-process dispatcher, wall-clock retry bookkeeping and bounded owner repair | New notification identity/queue/dispatcher deployment or publish-before-commit | Durable history gives exact reconstruction and deduplication; the approved outbox closes dual-write loss while keeping deployment small and failures visible |
 | D45 — G: Hold claimed rows locked through bounded PutEvents; keep looping after unexpected exceptions | Lease-then-publish with a separate acknowledgment transaction | Keeps claim/mark atomic and inspectable at lab scale; leases shorten locks at larger scale but add recovery state; class-only error logs preserve privacy while intent remains retryable |
+| D46 — J: Tenant advisory lock before day-row lock; short committed reservation and dispatch marker; inference outside transactions | Hold DB locks through inference; in-memory counters; lease only by day | Serializes a tiny ledger update, enforces concurrency across midnight and keeps model latency off DB locks; an ambiguous dispatch stays conservatively charged |
+| D47 — J: Refund never-dispatched expired reservations; retain uncertain dispatched charges, settle late actual usage once | Refund every expired lease; permanently charge successful calls their full reservation | Prevents timeout overspend while recovering concurrency and known unused budget; ties settlement to the original UTC day |
+| D48 — J: All explicit document authorization precedes body fetch; server-only source references and post-call reauthorization | Best-effort partial document answers; trust model citations; authorize only at token issuance | Keeps authorization inspectable, avoids source enumeration and discards answers after revocation without pretending to retract sent prompts |
+| D49 — M: Fixed dev environment and specified dimensions; fake uses the same local metric shape | Caller-selected dimensions; tenant dimensions on every request metric | Matches the single disposable lab deployment, bounds custom-metric cardinality, and tests EMF without creating paid metrics |
+
+**[Lab policy]** Slice 2d implementation details and response shapes are now in
+[contract §6.8](spec.md#68-native-ai-and-metering-workday-inspired-features-lab-policy-implementation);
+no model-access enablement, inference, metrics resources or infrastructure deployment
+was performed at this checkpoint.
 
 ## 11. Reviewer decisions and remaining deployment inputs
 
