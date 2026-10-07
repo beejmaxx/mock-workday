@@ -1,4 +1,4 @@
-# MW-M3: Workday core integration — checkpoint 1 draft
+# MW-M3: Workday core integration — approved specification
 
 **Status: approved with reviewer decisions, 2026-10-08.** Checkpoint 1 is
 complete. Implement the approved contract in the independently reviewed slices
@@ -371,7 +371,8 @@ an empty successful document. Store byte length and SHA-256 with metadata.
 
 **[Lab policy]** For create, authorize, write an immutable object, then insert
 metadata and audit in the DB transaction. On rollback, best-effort delete the
-object; a crash may leave an inaccessible orphan. Do not promise a transaction
+object; preserve it on an uncertain DB commit outcome because metadata may
+already be durable. A crash may leave an inaccessible orphan. Do not promise a transaction
 across PostgreSQL and S3. An operator cleanup compares object IDs against DB
 metadata; teardown empties all objects. No queue or background worker is added.
 Local mode retains DB text bodies behind the same document functions, with
@@ -481,7 +482,9 @@ benefits/security/leave policies. Targets/classification follow spec §7. Body
 sizes cycle deterministically from 4 to 16 KiB (about 10 KiB average): roughly
 140 MiB of document bodies. Budget under 0.5 GiB DB storage including indexes
 and metadata in AWS, under 0.7 GiB locally with text bodies. These are design
-estimates; checkpoint 2 records measured counts/bytes and checkpoint 4 timings.
+estimates. Slice 2a measured 146,761,728 body bytes and 48,811,155 local DB bytes
+(including small fixtures/indexes); repeated synthetic text compresses heavily.
+Cloud sizing/timings remain checkpoint-4 evidence.
 No binary parsing, embeddings, or bulk report objects are precomputed.
 
 **[Lab policy]** At least 1% of documents carry tagged manifest fixtures for
@@ -600,8 +603,9 @@ not receive automated edits or resources from Mock Workday.
 DNS target, with TTL 60 seconds for CNAME records. Associate the zone with the
 approved consumer VPC; cross-account association requires actions by both
 owners. Do not enable PrivateLink's provider private-DNS verification for the
-unowned `.local` suffix. `.local` can invoke mDNS on some clients: runtime must
-use its VPC DNS resolver, and smoke tests must resolve these exact names.
+reserved `.internal` suffix. Runtime clients use their VPC DNS resolver,
+and smoke tests must resolve these exact names; canonical `.local` identity
+strings do not select private DNS names.
 No wildcard tenant records. [Private hosted zones][aws-private-dns]
 
 **[Lab policy]** Generate a small disposable lab CA offline and a server leaf
@@ -749,7 +753,7 @@ retry failed or unknown outcomes with exponential backoff capped at 60 seconds.
 SDK timeouts bound each attempt. A crash after acceptance but before marking
 causes republication with the same stable event ID: delivery is at least once,
 with duplicates and no global ordering guarantee. Persist failures/retry state
-and expose overdue unpublished rows in structured logs/alarms. No separate
+and expose overdue unpublished rows in structured logs. No separate
 queue, worker framework or dispatcher deployment is introduced.
 
 **[Lab policy]** This closes the DB/event dual-write loss gap. Eventual publication
@@ -1216,7 +1220,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D11 — B: Defer A2A/MCP gateway | Duplicate all REST operations over two new protocols now | No agreed protocol-specific core interaction justifies the additional authorization and compatibility surface |
 | D12 — C: One bucket and one tenant CMK, Bucket Keys enabled | Shared bucket/key; per-object CMKs | Five tenants make clear policy boundaries cheap; Bucket Keys reduce request cost while retaining tenant key deletion |
 | D13 — C/L: Tenant-tagged STS role with prefix/key restrictions and 900s cached sessions | Broad app S3/KMS permissions; IAM role per tenant | Adds a cloud-side check below DB isolation without a role explosion or per-request STS call; trusted app remains the tag issuer |
-| D14 — C: S3 immutable bodies, DB metadata/authorization; write object before DB commit | Store everything in S3; distributed transaction | Ordinary relational security stays intact; bounded orphan cleanup is simpler than pretending atomic cross-service commits |
+| D14 — C: S3 immutable bodies, DB metadata/authorization; write object before DB commit | Store everything in S3; distributed transaction | Ordinary relational security stays intact; bounded orphan cleanup is simpler than pretending atomic cross-service commits; scan at most 1,000 keys per owner call, with a 24-hour age floor to avoid fresh in-flight uploads |
 | D15 — C/E: Crypto-shredding plus explicit row/object deletion | Promise immediate total erasure on key disable | Distinguishes key caches, reversible disabling, delayed final deletion, RDS data and already-disclosed copies honestly |
 | D16 — K: Three bulk tenants with fixed-seed/versioned generator; original fixtures unchanged | Enlarge Acme/Globex and rewrite the regression matrix | Realistic scale without destabilizing carefully defined access examples; manifest hashes detect generator drift; one shared synthetic password hash per bulk tenant avoids thousands of KDF calls |
 | D17 — K: Consistent historical records and read-only balance snapshots | Full accrual/payroll/absence accounting engine | Supplies useful context while keeping the existing two-process learning scope and no-live-balance rule explicit |

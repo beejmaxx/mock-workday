@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from secrets import token_bytes
 
@@ -10,6 +10,7 @@ from .clock import Clock
 from .db import one
 from .errors import APIError, request_id
 from .ratelimit import RateLimits
+from .storage import Storage
 from .faults import Faults, start_faults, timeout
 
 
@@ -21,6 +22,7 @@ class Context:
     p: Principal
     now: datetime
     request_id: str
+    uploaded_documents: list = field(default_factory=list)
 
     def not_found(self, target, *, action="READ"):
         version = one(
@@ -124,6 +126,7 @@ class Context:
 class Service:
     def __init__(self, db, *, test_admin=False):
         self.db = db
+        self.storage = Storage.from_env()
         self.clock = Clock(controlled=test_admin)
         self.rate_limits = RateLimits()
         self.faults = Faults()
@@ -135,7 +138,7 @@ class Service:
         slug = host[: -len(suffix)] if host.endswith(suffix) else ""
         with self.db.app.connect() as conn:
             tenant = one(conn, "SELECT * FROM tenants WHERE slug=:slug", slug=slug)
-        if not tenant:
+        if not tenant or not tenant["enabled"]:
             raise APIError(404, "TENANT_NOT_FOUND")
         return tenant
 
@@ -143,18 +146,32 @@ class Service:
     def request(self, request):
         tenant = self.tenant(request)
         now = self.clock.now()
-        with self.db.tenant_tx(tenant["id"]) as conn:
-            p = authenticate(
-                conn, tenant, request.headers.get("authorization", ""), now
-            )
-            self.rate_limits.check(p, now)
-            rules = self.faults.take(
-                tenant["id"], request.method, request.url.path, p.client_id
-            )
-            try:
-                start_faults(rules, conn)
-                yield Context(self, conn, tenant, p, now, request_id(request))
-                timeout(rules, "timeout_before_commit")
-            finally:
-                conn.info.pop("audit_write_failure", None)
+        uploaded = []
+        commit_started = False
+        try:
+            with self.db.tenant_tx(tenant["id"]) as conn:
+                p = authenticate(
+                    conn, tenant, request.headers.get("authorization", ""), now
+                )
+                self.rate_limits.check(p, now)
+                rules = self.faults.take(
+                    tenant["id"], request.method, request.url.path, p.client_id
+                )
+                info = conn.info
+                try:
+                    start_faults(rules, conn)
+                    yield Context(
+                        self, conn, tenant, p, now, request_id(request), uploaded
+                    )
+                    timeout(rules, "timeout_before_commit")
+                    commit_started = True
+                finally:
+                    info.pop("audit_write_failure", None)
+        finally:
+            # An uncertain COMMIT outcome may already have durable metadata.
+            if not commit_started:
+                for document_id in uploaded:
+                    self.storage.cleanup(
+                        tenant, document_id, request_id=request_id(request)
+                    )
         timeout(rules, "timeout_after_commit")

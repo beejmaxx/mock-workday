@@ -32,11 +32,12 @@ class Database:
                 "SELECT set_config('app.tenant_id', :tid, true)",
                 tid=str(tenant_id),
             )
-            conn.info["tenant_id"] = tenant_id
+            info = conn.info
+            info["tenant_id"] = tenant_id
             try:
                 yield conn
             finally:
-                conn.info.pop("tenant_id", None)
+                info.pop("tenant_id", None)
 
     def install(self):
         with self.owner.begin() as conn:

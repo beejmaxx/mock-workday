@@ -6,6 +6,7 @@ from .auth import hash_secret, rotate_key
 from .clock import SEED_TIME
 from .db import run
 from .ids import seed_id
+from .storage import Storage
 
 ORGS = [
     ("SO-ROOT", "Office of the CEO", None),
@@ -90,12 +91,13 @@ def seed_hash(value):
 
 
 def seed(db):
+    storage = Storage.from_env()
     with db.owner.begin() as conn:
         run(conn, "TRUNCATE tenants, signing_keys RESTART IDENTITY CASCADE")
         for slug in ("acme", "globex"):
             run(
                 conn,
-                "INSERT INTO tenants VALUES (:id,:slug,:name)",
+                "INSERT INTO tenants (id,slug,name) VALUES (:id,:slug,:name)",
                 id=seed_id(slug, "tenant", slug),
                 slug=slug,
                 name=slug.title(),
@@ -305,7 +307,12 @@ def seed(db):
                     classification=classification,
                     owner_worker_id=sid("workers", worker) if worker else None,
                     org_id=sid("organizations", org) if org else None,
-                    content=content,
+                    **storage.put(
+                        {"id": tid, "enabled": True},
+                        sid("documents", title),
+                        content,
+                        reuse=True,
+                    ),
                     created_by_account_id=sid(
                         "accounts", "dana" if slug == "acme" else "dave"
                     ),

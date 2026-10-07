@@ -94,7 +94,10 @@ def get_document(request: Request, wid: UUID):
             sensitive=doc["classification"] in ("CONFIDENTIAL", "RESTRICTED"),
             status=404,
         )
-        return {**metadata(ctx, doc), "content": doc["content"]}
+        return {
+            **metadata(ctx, doc),
+            "content": ctx.service.storage.get(ctx.tenant, doc),
+        }
 
 
 @router.post("", status_code=201, response_model=DocumentMetadata)
@@ -135,14 +138,16 @@ def create_document(request: Request, body: DocumentInput):
         did = uuid4()
         values = body.model_dump() | {"id": did}
         ctx.require("WRITE", body.domain, target_for(ctx, values))
+        stored = ctx.service.storage.put(ctx.tenant, did, body.content)
+        ctx.uploaded_documents.append(did)
         doc = one(
             ctx.conn,
             """INSERT INTO documents
-            (id,tenant_id,title,content,domain,classification,owner_worker_id,org_id,
+            (id,tenant_id,title,content,content_bytes,content_sha256,domain,classification,owner_worker_id,org_id,
              created_by_account_id,created_by_client_id,created_at)
-            VALUES (:id,:tid,:title,:content,:domain,:classification,:owner_worker_id,:org_id,:aid,:cid,:now)
+            VALUES (:id,:tid,:title,:content,:content_bytes,:content_sha256,:domain,:classification,:owner_worker_id,:org_id,:aid,:cid,:now)
             RETURNING id,title,domain,classification,owner_worker_id,org_id,created_at""",
-            **values,
+            **(values | stored),
             aid=ctx.p.account_id,
             cid=ctx.p.client_id,
             now=ctx.now,
@@ -155,7 +160,7 @@ def create_document(request: Request, body: DocumentInput):
             did,
             "created",
             None,
-            values,
+            {k: v for k, v in (values | stored).items() if k != "content"},
             ctx.now,
         )
         return metadata(ctx, doc)

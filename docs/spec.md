@@ -1,6 +1,6 @@
 # Mock Workday: detailed specification (v1)
 
-**Status:** M1 approved. M2 implemented; awaiting review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
+**Status:** M1, M2 and D1 complete. M3 spec approved; slice 2a implemented for review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
 
 **Labels:**
 
@@ -14,6 +14,7 @@ Unlabeled statements are implementation choices.
 
 - **M1:** §0–4, §6 except §6.4, §7, §8, §9 except faults, §10 except the M2 seed addition, and the M1 tests in §11.
 - **M2:** §5 (business processes), §6.4 (idempotency), fault injection in §9, the M2 seed addition, and the M2 tests in §11.
+- **M3 slice 2a:** tenant storage and STS sessions, bulk-v1 seeding and balance snapshots. Later M3 slices and AWS infrastructure follow [m3-spec.md](m3-spec.md).
 
 ---
 
@@ -68,6 +69,7 @@ mock-workday/
 - The tenant comes from the `Host` header: `{slug}.mockworkday.local`, for example `acme.mockworkday.local`.
 - An unknown host returns 404 `TENANT_NOT_FOUND`.
 - A `tenant_id` or tenant slug in a request body or query is never read.
+- Disabled tenants (including incomplete bulk imports) return 404 `TENANT_NOT_FOUND` before authentication or storage access. [Lab policy]
 
 ### Database roles and row-level security
 
@@ -88,7 +90,8 @@ mock-workday/
 - **Per-transaction tenant context:** every request transaction begins with `SELECT set_config('app.tenant_id', :tid, true)`. The third argument (`true`) is equivalent to `SET LOCAL`, so the setting cannot leak through pooled connections. Code that needs a transaction must obtain it through `db.tenant_tx(tenant_id)`.
 - **Global tables** (`tenants`, `signing_keys`) have no RLS. `mw_app` has `SELECT` on them; only `mw_owner` writes them.
 - **Least privilege for `mw_app`:**
-  - `SELECT` only on reference/configuration tables: `tenant_config`, `organizations`, `positions`, `workers`, `accounts`, `role_assignments`, `security_groups`, `api_clients`, `integration_group_members`, `integration_group_orgs`, and `domain_grants`.
+  - `SELECT` only on reference/configuration tables: `tenant_config`, `organizations`, `positions`, `workers`, `accounts`, `role_assignments`, `security_groups`, `api_clients`, `integration_group_members`, `integration_group_orgs`, `domain_grants`, and `time_off_balances`.
+  - No app privileges on owner-only `seed_loads` import markers.
   - `SELECT, INSERT` on `job_revisions`, `compensation_revisions`, and `documents`; no `UPDATE` or `DELETE`. Revisions are append-only to preserve effective-dated history and stable pagination.
   - `SELECT, INSERT` plus column-level `UPDATE (revoked_at)` on `delegation_grants`; no other updates or deletes.
   - `SELECT, INSERT` on `bp_events` plus column-level `UPDATE (status, current_step, version, completed_at)`; on `bp_steps` plus `UPDATE (status, acted_by, acted_by_client, acted_at, comment)`. No deletes.
@@ -112,7 +115,7 @@ mock-workday/
 ### 2.1 Tables
 
 ```text
-tenants(id uuid pk, slug text unique, name text)
+tenants(id uuid pk, slug text unique, name text, enabled bool default true)
 tenant_config(tenant_id pk, policy_version int not null default 1)
 
 organizations(id, tenant_id, ref_id, name, superior_id null → organizations)
@@ -154,10 +157,19 @@ api_clients(id, tenant_id, client_id text, secret_hash, name,
 delegation_grants(id, tenant_id, user_account_id, client_id, scopes text[],
                   created_at, expires_at, revoked_at null)
 
-documents(id, tenant_id, title, content text, domain, classification,
+documents(id, tenant_id, title, content text null, content_bytes int,
+          content_sha256 text, domain, classification,
           owner_worker_id null, org_id null, created_by_account_id,
           created_by_client_id null, created_at)
     -- at most one of owner_worker_id, org_id is set; neither = tenant-wide
+
+-- M3 slice 2a (Lab policy)
+time_off_balances(id, tenant_id, worker_id, plan VACATION, as_of date,
+                  granted_hours, taken_hours, remaining_hours)
+    -- numeric(8,2), nonnegative quarter hours, remaining = granted - taken
+    -- unique tenant/worker/plan/as_of; owner-only writes; FORCE RLS
+seed_loads(tenant_id pk, version, checksum, complete bool default false)
+    -- owner-only, FORCE RLS; partial bulk tenants are not routable
 
 -- M2
 bp_events(id, tenant_id, type CHANGE_JOB|REQUEST_TIME_OFF, subject_worker_id,
@@ -560,6 +572,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 | `GET /api/v1/workers/{wid}?as_of=` | WORKER_BASIC | M1 |
 | `GET /api/v1/workers/{wid}/organizations?as_of=` | WORKER_ORGANIZATIONS | M1 |
 | `GET /api/v1/workers/{wid}/compensation?as_of=` | WORKER_COMPENSATION (audited) | M1 |
+| `GET /api/v1/workers/{wid}/time-off-balances?as_of=` | ABSENCE (audited), §6.2.1 | M3 2a |
 | `GET /api/v1/workers/{wid}/history` | revisions; compensation fields only with WORKER_COMPENSATION | M1 |
 | `GET /api/v1/workers/{wid}/direct-reports?as_of=` | WORKER_BASIC per row | M1 |
 | `GET /api/v1/organizations/{wid}` and `…/{wid}/workers` | organizations: any authenticated tenant principal [Lab]; workers: per row | M1 |
@@ -604,6 +617,20 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
   - Creation returns **201**; listing returns an array of the caller's grants.
 
 **Direct reports [WD-inspired]:** workers whose organization (as of `as_of`) has a filled position holding `MANAGER` directly that belongs to `{wid}`, plus the managers of those organizations' immediate sub-organizations.
+
+### 6.2.1 Time-off balance snapshots (M3 slice 2a) [Workday-inspired]
+
+`GET /api/v1/workers/{wid}/time-off-balances?as_of=YYYY-MM-DD` requires current
+ABSENCE VIEW and the `absence` scope for scoped callers. Apply current worker
+reach even for historical dates. Unknown/hidden workers return 404. Return
+`{"worker": Reference, "data": [{"plan":"VACATION", "asOf":"YYYY-MM-DD",
+"grantedHours":160, "takenHours":8, "remainingHours":152}]}` using the latest
+snapshot per plan no later than `as_of` (default current business date); no
+snapshot means an empty `data`. Reads are sensitive/audited. Plans and dates
+are snapshots, not a live accrual calculation. Existing Request Time Off
+continues to make no balance changes. No balance write endpoint is added.
+
+---
 
 ### 6.3 Pagination [Lab, decided]
 
@@ -689,11 +716,52 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 
 ---
 
+### 7.1 Document storage (M3 slice 2a) [Lab policy]
+
+Local mode retains UTF-8 bodies in PostgreSQL. In AWS mode, PostgreSQL holds
+metadata, byte length and SHA-256 only; bodies are immutable S3 objects at
+`tenants/{tenant UUID}/documents/{document UUID}` (hyphenated UUIDs). Paths and
+buckets are server-derived. Document metadata/content response shapes, the
+64-KiB UTF-8 limit and authorization stay unchanged. Lists never fetch bodies.
+Authorize before S3; commit sensitive-read audit before responding. Missing,
+corrupt or unavailable objects/keys return 503 `SERVICE_UNAVAILABLE`; never
+fall back to a DB body in AWS mode. Audit object records include the content
+fingerprint, not a second body copy.
+
+Create writes S3 before metadata/audit commit, using a conditional immutable
+put with SSE-KMS, the configured tenant CMK, and S3 Bucket Keys. On DB/audit
+rollback, attempt object deletion; log tenant/document IDs on cleanup failure.
+A response timeout after commit or an uncertain commit outcome must not delete
+the object. Process crashes or
+ambiguous upload failures may leave inaccessible objects: owner inventory and
+bounded owner cleanup compares document IDs with committed metadata, scans at
+most 1,000 keys per call and only removes objects older than 24 hours. It
+serializes against bulk imports and provides a continuation token. This is not a
+distributed transaction.
+
+`MW_TENANT_STORAGE` is JSON keyed by hyphenated tenant WID, each value exactly
+`{"bucket":"...","kms_key_id":"..."}`. Absent/empty mapping means local DB
+storage. AWS mode also requires `MW_TENANT_DATA_ROLE_ARN`; a missing tenant
+mapping fails closed. No caller can supply the role, tenant tag, bucket or key.
+Cloud calls use synchronous boto3 and the standard AWS credential/Region chain.
+The task role assumes the tenant data role with `tenant=<WID>`, duration 900s;
+cache clients in memory by `(role ARN, tenant WID)`, refreshing under a per-tenant
+lock with 120s remaining. Check enabled/provisioned tenant before cache use;
+no fallback to base-role S3 credentials. Bounded SDK retries/timeouts apply.
+
+The approved checkpoint-3 policy design is one bucket/CMK per tenant, tag-based
+prefix/bucket/key restrictions, `sts:TagSession` trust, and no base-role tenant
+data access; see [M3 §4.1](m3-spec.md#41-storage-and-isolation).
+Slice 2a implements session tags and S3 request behavior; actual IAM/KMS
+policy enforcement, Bucket Key/CloudTrail evidence and crypto-shredding require
+checkpoint-3 planning and checkpoint-4 live validation. These are lab choices,
+not claims about Workday infrastructure.
+
 ## 8. Audit
 
 | Record | Written when | Transaction |
 |---|---|---|
-| `audit_authz` | Every sensitive read (compensation; history with compensation fields; single-document content reads ≥ CONFIDENTIAL; document lists return metadata only), every write decision, every direct-request denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
+| `audit_authz` | Every sensitive read (balance snapshots; compensation; history with compensation fields; single-document content reads ≥ CONFIDENTIAL; document lists return metadata only), every write decision, every direct-request denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
 | `audit_objects` | Every inserted revision, document, event status change, grant creation or revocation | Same transaction as the change |
 | `bp_history` | Every initiate, approve, deny, or cancel action | Same transaction |
 
@@ -840,6 +908,54 @@ Client secrets are synthetic: `secret-<client_id>`. Disposable Compose database 
 ### M2 seed addition
 
 A pending Time Off request for Grace whose `reason` contains prompt-injection text.
+
+---
+
+### M3 bulk-v1 additions [Lab policy]
+
+Ordinary startup, reset and tests keep Acme/Globex, their IDs, credentials and
+visibility unchanged. Explicit `make seed-bulk` adds Northstar (512 workers,
+43 orgs, 600 positions), Meridian (1,024/85/1,200) and Cedar (2,048/171/2,400).
+The generator uses seed 20261008, SHA-256-derived per-tenant RNG streams, fixed
+iteration/templates and UUID5 IDs. Each tenant manifest contains table counts,
+canonical table hashes, per-document length/hash and injection/control labels;
+no password hashes or private keys are part of the manifest. Shared synthetic
+password `pw-bulk-{slug}` uses one randomly salted KDF hash per tenant, reused
+across bulk accounts `worker-00001`, etc.; original small passwords are unchanged.
+
+Each worker has three job/compensation revisions (2024/2025/2026 January 1),
+two time-off events, one completed Change Job and four 4–16 KiB documents.
+Supervisory trees have 4–5 levels, parent-org managers, constrained HR/comp
+roles, unfilled leadership positions and vacant positions for live changes.
+Historical positions rotate without overlapping occupants at an effective date.
+Completed job events link to 2026 revisions; seed approvals are imported
+fixtures, not live business transactions. Two balance snapshots (2026-01-01 and
+seed day) agree with completed seeded absence days at eight hours/day. Live
+absence approval still does not alter these snapshots.
+
+Documents include offers, performance/onboarding notes, acknowledgements,
+handbooks, policies and org plans. At least 1% are inert injection fixtures,
+with benign controls; URLs use `exfil.invalid`. Domain/classification and current
+object access apply equally to fixtures and normal documents. Manifest labels
+are not exposed as model safety guarantees. ASU seed additions are deferred to
+slice 2b; events/AI are never invoked during import.
+
+The owner importer runs locally in the existing Compose service, or as a
+one-off bootstrap-image command against RDS/S3 at approved deployment. It uses
+100-row transactions and sequential object writes (within the eight-write cap).
+A session advisory lock serializes imports per tenant; a version/checksum marker
+and disabled tenant gate protect partial loads. Matching rows and objects are
+verified/skipped; a changed row or manifest fails, never overwritten. An
+incomplete load resumes; missing rows in a completed load require explicit
+reset. Seed objects use immutable conditional puts, verifying matching bodies
+on retry. Failed imports can leave unreferenced deterministic keys, never visible
+through the API. A full admin reset is explicit and destructive; it does not
+silently reset data on application startup. S3 cleanup is a separate owner task.
+
+`make test-bulk` uses a throwaway PostgreSQL cluster without AWS or Docker.
+The measured size and commands are recorded in the README. Schema changes use
+fresh disposable databases; there is no migration framework or implicit ALTER
+of an already installed D1 database.
 
 ---
 
@@ -1002,6 +1118,21 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-F-03 | Final revision audit fails in PostgreSQL | revisions, history, transition, and idempotency receipt roll back together; retry succeeds |
 
 ---
+
+### M3 slice 2a: storage, bulk seed and balances
+
+| ID | Acceptance |
+|---|---|
+| T-M3-S-01 | Local/API shapes unchanged; server-derived S3 paths; unauthorized/cross-tenant access before cloud calls; lists metadata only |
+| T-M3-S-02 | SSE-KMS/Bucket Key immutable upload; integrity/missing/upload/audit failure; rollback cleanup; post-commit timeout keeps object; seed retry verification |
+| T-M3-SEED-01 | Full deterministic counts/manifests/injection controls; old fixtures unchanged; position occupancy, field visibility and pagination |
+| T-M3-SEED-02 | Full load/rerun, modified-row rejection, partial tenant unavailable, resume, no events/inference, RDS/local size |
+| T-M3-BAL-01 | Snapshot dates and quarter-hour schema; current ABSENCE scope/reach; cross-tenant RLS; owner-only writes; no live debit |
+| T-M3-ABAC-02 | Tagged STS calls, per-tenant cache separation, concurrent refresh, disabled/unknown tenant rejection; no cached fallback on refresh failure |
+
+T-M3-S-03 and T-M3-ABAC-01 are reserved for checkpoint-4 live policy proofs;
+report session-expiry caps belong to slice 2c. No local stub test claims AWS
+policy enforcement.
 
 ## 12. Reproducible, disposable environments [Lab requirement]
 

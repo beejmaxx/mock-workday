@@ -1,7 +1,8 @@
 CREATE TABLE tenants (
     id uuid PRIMARY KEY,
     slug text NOT NULL UNIQUE,
-    name text NOT NULL
+    name text NOT NULL,
+    enabled boolean NOT NULL DEFAULT true
 );
 CREATE TABLE signing_keys (
     id uuid PRIMARY KEY,
@@ -149,7 +150,10 @@ CREATE TABLE documents (
     id uuid PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES tenants,
     title text NOT NULL,
-    content text NOT NULL CHECK (octet_length(content) <= 65536),
+    content text CHECK (octet_length(content) <= 65536),
+    content_bytes integer CHECK (content_bytes BETWEEN 0 AND 65536),
+    content_sha256 text CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (content IS NOT NULL OR (content_bytes IS NOT NULL AND content_sha256 IS NOT NULL)),
     domain text NOT NULL CHECK (domain IN ('DOC_TENANT','DOC_ORG','DOC_WORKER')),
     classification text NOT NULL CHECK (classification IN ('PUBLIC','INTERNAL','CONFIDENTIAL','RESTRICTED')),
     owner_worker_id uuid,
@@ -452,3 +456,34 @@ CREATE POLICY tenant_isolation ON idempotency_records
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
 GRANT SELECT, INSERT, DELETE ON idempotency_records TO mw_app;
+
+CREATE TABLE time_off_balances (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    worker_id uuid NOT NULL,
+    plan text NOT NULL CHECK (plan = 'VACATION'),
+    as_of date NOT NULL,
+    granted_hours numeric(8,2) NOT NULL CHECK (granted_hours >= 0 AND mod(granted_hours, 0.25) = 0),
+    taken_hours numeric(8,2) NOT NULL CHECK (taken_hours >= 0 AND mod(taken_hours, 0.25) = 0),
+    remaining_hours numeric(8,2) NOT NULL CHECK (remaining_hours = granted_hours - taken_hours AND remaining_hours >= 0),
+    UNIQUE (tenant_id, worker_id, plan, as_of),
+    FOREIGN KEY (tenant_id, worker_id) REFERENCES workers (tenant_id, id)
+);
+ALTER TABLE time_off_balances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE time_off_balances FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON time_off_balances
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT ON time_off_balances TO mw_app;
+
+CREATE TABLE seed_loads (
+    tenant_id uuid PRIMARY KEY REFERENCES tenants,
+    version text NOT NULL,
+    checksum text NOT NULL,
+    complete boolean NOT NULL DEFAULT false
+);
+ALTER TABLE seed_loads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE seed_loads FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON seed_loads
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);

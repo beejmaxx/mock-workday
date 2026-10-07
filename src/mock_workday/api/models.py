@@ -203,3 +203,16 @@ class OperationReceipt(BaseModel):
     status: str
     resource: Reference
     event: ProcessEvent | None = None
+
+
+class TimeOffBalance(BaseModel):
+    plan: Literal["VACATION"]
+    asOf: date
+    grantedHours: float
+    takenHours: float
+    remainingHours: float
+
+
+class TimeOffBalances(BaseModel):
+    worker: Reference
+    data: list[TimeOffBalance]

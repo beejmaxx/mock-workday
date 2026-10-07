@@ -1960,6 +1960,148 @@
         }
       }
     },
+    "/api/v1/workers/{wid}/time-off-balances": {
+      "get": {
+        "summary": "Time Off Balances",
+        "operationId": "time_off_balances_api_v1_workers__wid__time_off_balances_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Wid"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeOffBalances"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        }
+      }
+    },
     "/api/v1/documents": {
       "get": {
         "summary": "List Documents",
@@ -4294,6 +4436,61 @@
           "href"
         ],
         "title": "Reference"
+      },
+      "TimeOffBalance": {
+        "properties": {
+          "plan": {
+            "type": "string",
+            "const": "VACATION",
+            "title": "Plan"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date",
+            "title": "Asof"
+          },
+          "grantedHours": {
+            "type": "number",
+            "title": "Grantedhours"
+          },
+          "takenHours": {
+            "type": "number",
+            "title": "Takenhours"
+          },
+          "remainingHours": {
+            "type": "number",
+            "title": "Remaininghours"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan",
+          "asOf",
+          "grantedHours",
+          "takenHours",
+          "remainingHours"
+        ],
+        "title": "TimeOffBalance"
+      },
+      "TimeOffBalances": {
+        "properties": {
+          "worker": {
+            "$ref": "#/components/schemas/Reference"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/TimeOffBalance"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "worker",
+          "data"
+        ],
+        "title": "TimeOffBalances"
       },
       "TimeOffInput": {
         "properties": {

@@ -86,6 +86,13 @@ def database(tmp_path_factory):
         )
 
 
+@pytest.fixture(autouse=True)
+def local_storage(monkeypatch):
+    # A developer's deployment environment must never turn pytest into live AWS work.
+    monkeypatch.delenv("MW_TENANT_STORAGE", raising=False)
+    monkeypatch.delenv("MW_TENANT_DATA_ROLE_ARN", raising=False)
+
+
 @pytest.fixture
 def env(database):
     seed(database)

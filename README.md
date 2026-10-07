@@ -231,3 +231,68 @@ failure; tag-only findings are informational warnings and do not fail the check.
 STOPPED tasks and task definitions do not count as billable leftovers. Target
 groups, ECS service metadata and unattached ENIs are informational inventory.
 It never deletes anything automatically.
+
+
+## M3 slice 2a: bulk data and tenant storage
+
+The approved [M3 spec](docs/m3-spec.md) is implemented in reviewable slices.
+Slice 2a adds storage/session code, a deterministic bulk generator and balance
+reads. AWS provisioning/policy validation remains at checkpoints 3/4.
+Existing databases must be recreated with the new `schema.sql`; bootstrap does
+not migrate an already-installed D1 database.
+
+`make up` and `make test` keep the original small fixtures. Run `make seed-bulk`
+after local startup to add Northstar, Meridian and Cedar. `make test-bulk`
+loads and verifies all three in throwaway PostgreSQL, with no Docker/AWS calls.
+The three tenants add 3,584 workers, 299 orgs, 4,200 positions, 10,752 business
+processes and 14,336 documents. The full PostgreSQL test measured **146,761,728
+bytes (139.96 MiB)** of document text and **48,811,155 bytes (46.55 MiB)** for
+the local database including small fixtures/indexes. Repetitive synthetic text
+compresses heavily in PostgreSQL; this is not a production sizing estimate.
+Bulk usernames are `worker-00001`, etc.; each
+tenant shares synthetic password `pw-bulk-<slug>` and one computed password
+hash. Never use these credentials for real data.
+
+The CLI saves complete per-document manifests under `/tmp/mock-workday-bulk-manifests`
+by default (ephemeral with the container). For a selected tenant or another
+manifest directory, run inside the service container:
+
+```sh
+.venv/bin/python -m mock_workday.bulk_seed --tenant northstar --manifest-dir /tmp/bulk-manifests
+```
+
+The same command runs in the one-off bootstrap image against RDS/S3 at approved
+deployment. It verifies matching rows/bodies on rerun, resumes incomplete imports,
+and rejects modified fixtures. It never publishes events or invokes a model.
+Partial imports are unavailable through tenant routing. There is no automatic
+reset; the existing explicit test-admin reset restores the small dataset. It
+also removes bulk DB records; delete their S3 objects during owner cleanup or
+teardown. Import ASU fixtures only when slice 2b is implemented.
+
+`GET /api/v1/workers/{id}/time-off-balances?as_of=2026-10-07` returns authorized
+read-only VACATION snapshots, with `asOf`, granted/taken/remaining hours. Live
+time-off approvals do not debit these seed snapshots.
+
+Local bodies remain in PostgreSQL. To select AWS storage, provide both
+`MW_TENANT_DATA_ROLE_ARN` and `MW_TENANT_STORAGE`, a JSON map from hyphenated tenant
+UUIDs to `{"bucket":"...","kms_key_id":"..."}`. All configured cloud access
+uses the AWS credential chain and per-tenant tagged STS sessions. S3 puts are
+immutable, SSE-KMS encrypted and request Bucket Keys. A missing tenant mapping
+or failed cloud request cannot fall back to local bodies. No bucket/key/role
+is accepted from an API caller. Actual AWS policies/resources are not installed
+by this slice.
+
+An owner can inventory up to 1,000 document keys per call; only objects at least
+24 hours old with no committed metadata qualify as orphans. This excludes fresh
+in-flight uploads and serializes against bulk import. Use `next_token` as
+`--starting-token` to continue. The default is read-only; explicitly add
+`--delete-orphans` to delete the returned candidates:
+
+```sh
+.venv/bin/python -m mock_workday.storage --tenant <tenant-uuid>
+```
+
+Run cleanup before deleting the tenant registry record; stack teardown handles
+buckets left by a full database reset. Manifests/inventories contain synthetic
+IDs, sizes and hashes, never credentials. Cloud-side integration and teardown
+proofs remain deferred until the approved deployment checkpoint.

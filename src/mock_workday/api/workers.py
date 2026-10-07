@@ -9,6 +9,7 @@ from ..db import one, rows
 from ..pagination import page
 from .models import (
     Compensation,
+    TimeOffBalances,
     HistoryItem,
     Organization,
     Position,
@@ -325,4 +326,37 @@ def position(request: Request, wid: UUID):
             **ref("positions", row, "title"),
             "refId": row["ref_id"],
             "organization": org_ref(ctx.conn, row["org_id"]),
+        }
+
+
+@router.get("/workers/{wid}/time-off-balances", response_model=TimeOffBalances)
+def time_off_balances(request: Request, wid: UUID, as_of: date | None = None):
+    with request.app.state.service.request(request) as ctx:
+        worker = one(
+            ctx.conn, "SELECT * FROM workers WHERE tenant_id=:tid AND id=:id", id=wid
+        )
+        target = worker_target(ctx.conn, wid, ctx.now)
+        if not worker:
+            ctx.not_found(target)
+        ctx.require("READ", "ABSENCE", target, sensitive=True, status=404)
+        snapshots = rows(
+            ctx.conn,
+            """SELECT DISTINCT ON (plan) * FROM time_off_balances
+            WHERE tenant_id=:tid AND worker_id=:wid AND as_of<=:day
+            ORDER BY plan,as_of DESC""",
+            wid=wid,
+            day=as_of or ctx.now.date(),
+        )
+        return {
+            "worker": ref("workers", worker),
+            "data": [
+                {
+                    "plan": row["plan"],
+                    "asOf": row["as_of"],
+                    "grantedHours": row["granted_hours"],
+                    "takenHours": row["taken_hours"],
+                    "remainingHours": row["remaining_hours"],
+                }
+                for row in snapshots
+            ],
         }
