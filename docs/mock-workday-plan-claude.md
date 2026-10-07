@@ -91,7 +91,8 @@ These are the kinds of interaction the runtime must handle, independent of which
 - Mock Workday is the issuer.
 - Short-lived signed tokens carry identity only (`iss`, `aud`, `sub`, `act`, `scope`, `exp`, `jti`, and a grant ID for delegated tokens).
 - **Signing (decided):** RS256 JWTs with `kid`, published through a JWKS endpoint.
-  - One signing key per tenant, so an Acme key cannot mint Globex tokens even through a bug.
+  - One issuer-wide key set with rotation; each tenant has its own `iss` and `aud`.
+  - Tenant isolation comes from issuer, audience, and endpoint checks plus authorization, not from separate keys. One process holds every key, so per-tenant keys would add key management without containing an issuer compromise.
   - Validation uses an algorithm allowlist plus the tenant's expected issuer and audience.
   - Key rotation gets a test.
 - Group membership is resolved per request, so revocation takes effect immediately.
@@ -275,7 +276,11 @@ final approval transaction:
 
 - No scheduler and no second "apply" transaction. The new revision becomes current when its effective date arrives.
 - "Approved but not recorded" never exists.
-- **No backdating in v1:** effective dates cannot be earlier than the initiation date.
+- **No backdating in v1 (decided):** `effective_date >= completion date` for every Change Job.
+  - At initiation, the effective date cannot be earlier than the initiation date.
+  - At final approval, the check runs again against the authoritative clock, inside the same transaction and lock as completion. If the date has passed, the request fails with `409 EFFECTIVE_DATE_PASSED` and no revision is committed.
+  - After the effective date passes, approvals are rejected; deny and cancel remain available. The event stays in progress until it is canceled and re-initiated with a new date.
+  - The effective date is never silently moved, because that would change the requested business operation.
 - **One pending Change Job per worker (decided):**
   - "Pending" means in progress, or completed but not yet effective.
   - Because "not yet effective" depends on time, a unique index cannot enforce this.
@@ -317,7 +322,12 @@ Before Nov 1, Alice still sees Bob and the Finance manager does not. On and afte
   - Reusing a key with a different request is rejected.
   - Retained for 24 hours (decided). After that, a reused key is a new request, so runtime retries must finish within the window.
   - **Processing order (decided):** authenticate, then look up the key, before any version check.
-  - **Replay (decided, lab policy):** a replay of a completed operation re-authorizes the caller first. If still authorized, it returns the recorded result rather than a misleading 409. If no longer authorized, it is denied without revealing the outcome. The runtime must then treat the outcome as unknown and resolve it some other way.
+  - **Replay (decided, lab policy):** "may Alice perform this now?" and "may Alice learn the result of what she already did?" are separate questions. For a key whose operation already completed:
+    1. Authenticate the caller. A disabled client or revoked delegation grant is denied entirely; revoking a grant withdraws the agent's authority to act for the user.
+    2. Verify tenant, principal, client, key, and request hash.
+    3. Never execute the operation again.
+    4. Return a minimal stored receipt (`operation_id`, `status`, `resource_id`), without re-checking the business permission used to perform the action.
+    5. Any additional resource data in the stored response is disclosed only if the caller's current read authorization permits it.
 - **Optimistic concurrency:** step actions name the expected step and event version; a lost race returns 409.
 - **Error semantics** documented for 401, 403, 404, 409, 429, and 503.
 - **Correlation:** caller-supplied request IDs are recorded in audit and grant no authority.
@@ -372,7 +382,7 @@ Python, FastAPI, PostgreSQL, SQLAlchemy, pytest, and Docker Compose.
 | Milestone | Scope | Exit evidence |
 |---|---|---|
 | **M1: Foundation** | Tenancy and identity (including delegation), the HCM graph with effective dating, security, documents, authorized read APIs and history, paginated listing, rate limiting, object and authorization-decision audit | Visibility matrix passes: self, inheritance, siblings, cross-tenant, compensation separation, document domains, delegation intersection, as-of reads, and role revocation mid-session. Bulk-scan contract passes: an integration user pages through the Acme workers it may see, receives deterministic 429s with `Retry-After`, continues with its cursor without duplicates (and without gaps when nothing changes), and loses access mid-scan when its permissions are revoked. Delegation: revoking a grant invalidates an unexpired token; as-of reads never restore lost access |
-| **M2: Actions** | Process model, Request Time Off, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny and cancel-versus-approve races, concurrent Change Job initiations for one worker, lost response after commit (replay returns the recorded result), replay after permission loss (denied), conflicting key reuse, time-off routing after a manager change, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
+| **M2: Actions** | Process model, Request Time Off, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny and cancel-versus-approve races, concurrent Change Job initiations for one worker, lost response after commit (replay returns the receipt), replay after business-permission loss (receipt returned, sensitive fields withheld), replay after grant revocation (denied), final approval after the effective date (409, nothing committed), conflicting key reuse, time-off routing after a manager change, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
 
 After M2, the Agent Cell Runtime begins. Mock Workday changes only through versioned API changes the runtime needs.
 
