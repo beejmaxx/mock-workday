@@ -10,4 +10,6 @@ This is an independent learning project. It is not affiliated with or endorsed b
 
 ## Documents
 
-- [Proposed plan](docs/mock-workday-plan-claude.md): scope, security and identity model, the Change Job process, audit, milestones, and open decisions.
+- [Plan](docs/mock-workday-plan-claude.md): scope, boundaries, and decisions.
+- [Specification](docs/spec.md): the implementation contract (data model, identity, authorization, API, business processes, seed, and acceptance tests).
+- [Workday verification](docs/workday-verification.md): which Workday claims are verified, with sources.

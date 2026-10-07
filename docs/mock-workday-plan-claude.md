@@ -435,4 +435,4 @@ Globex: Dave (Manager) └─ Eve
 ## Before the detailed spec
 
 1. ~~Verify the Workday claims~~ Done: see [workday-verification.md](workday-verification.md). Subordinate access is resolved above.
-2. Write the detailed spec and test matrix. Implementation starts only after approval.
+2. ~~Write the detailed spec and test matrix~~ Done: see [spec.md](spec.md).
