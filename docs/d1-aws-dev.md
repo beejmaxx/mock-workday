@@ -25,7 +25,7 @@ The network belongs to the platform foundation, not to Mock Workday. Mock Workda
 | `registry` | `mock-workday/infra/envs/dev/registry` | persistent (pennies) | ECR repository `mock-workday`: scan on push, a lifecycle policy keeping the last 5 images, `force_delete` |
 | `service` | `mock-workday/infra/envs/dev/service` (built from `mock-workday/infra/modules/service`) | **disposable** | Everything billed by the hour (below) |
 
-- Every stack except `bootstrap` uses the S3 backend with `use_lockfile = true` and a distinct state key per stack.
+- Every stack except `bootstrap` uses the S3 backend with `use_lockfile = true`. Dev bucket: `beejmaxx-lab-tfstate-dev`, region `us-east-2`. Mock Workday keys: `dev/mock-workday-registry.tfstate` and `dev/mock-workday-service.tfstate`. Pin AWS provider `~> 6.0`. Before the bucket exists, use `terraform init -backend=false` for validation.
 - Mock Workday's stacks read the network only from SSM parameters, never from the foundation's Terraform state.
 - `modules/service` is environment-neutral: dev-only behavior (test admin, ECS Exec) is controlled by variables that default to off. Image tag or digest, `allowed_cidr`, sizing, and log retention are variables. Prod later reuses the module with its own small composition.
 - Prod will run the exact image digest verified in dev (build once, promote by digest), not a rebuild.
@@ -86,3 +86,27 @@ Destroyed, the remaining cost is about $0: S3 state, SSM parameters, ECR storage
 ## Out of scope
 
 Prod; TLS and custom domains; CI/CD; Multi-AZ RDS; autoscaling; WAF; running the full pytest suite against AWS.
+
+## Implementation details and local checks
+
+- `infra/modules/service` has no dev-specific names, account IDs or regions. Inputs
+  include name, account, region, repository name, image tag/digest, network IDs,
+  allowed CIDR, Fargate CPU/memory, DB class/storage and log retention.
+  `enable_test_admin` and `enable_exec` default false; `envs/dev/service` sets both true.
+- Application variables: `MW_DB_HOST`, `MW_DB_PORT`, `MW_DB_NAME`,
+  `MW_DB_OWNER_PASSWORD`, `MW_DB_APP_PASSWORD`; optional migration-only
+  `MW_DB_ADMIN_USER` and `MW_DB_ADMIN_PASSWORD`. Role names remain `mw_owner` and
+  `mw_app` so the schema grants remain exact. Local defaults are unchanged.
+- Terraform creates the database; bootstrap provisions its roles and schema.
+  The regular task starts only the app; only the separate migration task receives
+  the master password. The ALB probes `/openapi.json`; the wrapper also requires
+  successful migration before reporting a healthy deployment.
+- ECS Exec task permission is limited to the four channel actions:
+  `CreateControlChannel`, `CreateDataChannel`, `OpenControlChannel`, `OpenDataChannel`
+  under `ssmmessages`, on `*`.
+
+| Test | Behavior |
+|---|---|
+| T-D1-01 | Database host/port/name environment settings and safely encoded passwords |
+| T-D1-02 | Non-superuser master bootstrap on a fresh database, then rerun without reseeding or rotating signing keys |
+| T-D1-03 | Missing login roles created without superuser/RLS bypass; rerun updates passwords |

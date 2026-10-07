@@ -127,3 +127,95 @@ Other systems consume only the versioned HTTP contract and container image. Ther
 - [Public OpenAPI document](docs/openapi.json)
 - [Original plan](docs/mock-workday-plan-claude.md)
 - [Workday evidence and deliberate simplifications](docs/workday-verification.md)
+
+## AWS dev (MW-D1)
+
+The [D1 spec](docs/d1-aws-dev.md) owns the deployment contract. This repository
+contains only the registry and disposable service stacks. The platform repository
+owns the state bucket and foundation; deploy those separately before planning here.
+No foundation Terraform state is read: network IDs come only from
+`/lab/dev/network/vpc_id`, `/lab/dev/network/public_subnet_ids`, and
+`/lab/dev/network/private_subnet_ids` in SSM.
+
+Prerequisites: Terraform 1.10+, AWS CLI v2 with a valid `agent-runtime` profile for
+dev account `729608197929`, Docker/Colima with ARM64 builds, Python 3, curl, and make.
+For example, install Terraform with `brew install hashicorp/tap/terraform`.
+The AWS region is fixed to `us-east-2`; scripts honor `AWS_PROFILE` and default it
+to `agent-runtime`, and refuse another account. ECS Exec additionally needs the
+AWS Session Manager plugin on the operator's machine.
+
+The encrypted S3 backend is `beejmaxx-lab-tfstate-dev`, with native lock files and
+keys `dev/mock-workday-registry.tfstate` and `dev/mock-workday-service.tfstate`.
+AWS provider `~> 6.0` and committed provider lock files keep installs reproducible.
+Before the bucket/foundation exist, validate without connecting a backend:
+
+```sh
+terraform -chdir=infra/envs/dev/registry init -backend=false
+terraform -chdir=infra/envs/dev/registry validate
+terraform -chdir=infra/envs/dev/service init -backend=false
+terraform -chdir=infra/envs/dev/service validate
+terraform fmt -check -recursive infra
+```
+
+After the platform is available:
+
+```sh
+make aws-plan       # prompts for an IPv4 /32; default is your current public IP
+# Stop here for user review of the plans. The following commands create/delete resources:
+make aws-up         # interactive Terraform applies, ARM64 build/push, migration, health wait
+make aws-smoke      # 200 worker read, 403 compensation, 404 cross-tenant, 401 revoked grant
+make aws-down       # interactive destroy of SERVICE ONLY, then leftover inventory
+make aws-leftovers  # read-only inventory; nonzero if leftovers remain
+```
+
+`aws-plan` and `aws-up` save non-secret deployment inputs in the gitignored
+`.local/aws-dev.tfvars.json`. `MW_IMAGE_TAG` overrides the default Git commit tag.
+The module also accepts an image digest, sizing, database backup/deletion policies,
+secret recovery window, log retention, name, account,
+region and network inputs. `enable_test_admin` and `enable_exec` default to false;
+the dev root explicitly enables them. Neither the module nor these scripts create
+a VPC, NAT gateway, endpoints, or the platform state bucket.
+
+The service has one ARM64 Fargate task, private PostgreSQL 17, and an HTTP ALB
+restricted to the chosen /32. Only port 8080 reaches the load balancer. The
+one-off migration task receives the RDS master password; the long-running service
+receives only the owner/app passwords. It starts the application directly without
+running the privileged bootstrap. Bootstrap creates missing roles, updates their
+passwords, and installs/seeds a fresh database without reseeding an existing one.
+The ALB health check uses `/openapi.json`; the migration must also succeed before
+`aws-up` reports success. Use `aws-smoke` to verify database-backed behavior.
+
+Application environment variables (Compose defaults preserved):
+
+| Variable | Default / use |
+|---|---|
+| `MW_DB_HOST` | `db` |
+| `MW_DB_PORT` | `5432` |
+| `MW_DB_NAME` | `mock_workday` |
+| `MW_DB_OWNER_PASSWORD` | `mw-owner-lab`, for fixed role `mw_owner` |
+| `MW_DB_APP_PASSWORD` | `mw-app-lab`, for fixed role `mw_app` |
+| `MW_DB_ADMIN_USER`, `MW_DB_ADMIN_PASSWORD` | Optional, migration only; master connects to the existing database |
+
+Secrets are injected by ECS from Secrets Manager; do not put passwords in tfvars
+or shell arguments. Terraform state contains generated owner/app passwords, so
+keep the backend private. The task role has only the four
+[documented ECS Exec channel permissions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html#ecs-exec-required-iam-permissions).
+To check admin access after deployment, choose the running service task and use:
+
+```sh
+aws --profile agent-runtime --region us-east-2 ecs execute-command \
+  --cluster mock-workday-dev --task <service-task-arn> --container mock-workday \
+  --interactive --command 'curl -fsS http://localhost:8081/openapi.json'
+```
+
+Budget roughly **$0.07–0.08/hour while running**, the D1 planning estimate for
+Fargate, RDS/storage, ALB/usage, and public IPv4 addresses. Actual use and pricing
+vary; see [Fargate](https://aws.amazon.com/fargate/pricing/),
+[RDS](https://aws.amazon.com/rds/postgresql/pricing/),
+[ALB](https://aws.amazon.com/elasticloadbalancing/pricing/), and
+[IPv4 pricing](https://aws.amazon.com/vpc/pricing/). **Run `make aws-down` after
+study sessions.** RDS provisioning may take several minutes. Destroying the
+service retains the registry and platform; image/state storage can still incur
+small charges. The leftover checker scans the dev account for the listed resource
+classes (including untagged resources and logs in `us-east-1`), so unrelated
+projects may also be reported. It never deletes anything automatically.

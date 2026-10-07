@@ -4,7 +4,9 @@ COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
-RUN uv sync --frozen --no-dev && useradd --create-home service
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv sync --frozen --no-dev && useradd --create-home service
 USER service
 EXPOSE 8080 8081
 CMD ["sh", "-c", ".venv/bin/python -m mock_workday.bootstrap && exec .venv/bin/python -m mock_workday.app"]

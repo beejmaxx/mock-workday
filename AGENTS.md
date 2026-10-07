@@ -1,7 +1,7 @@
 # Project instructions
 
-- Current phase: implement **M2** exactly as specified in `docs/spec.md`. Then stop and report for review.
-- No Terraform or AWS work in M2. AWS deployment is milestone D1 (spec §12), which gets its own spec first.
+- Current phase: implement **MW-D1** per `docs/d1-aws-dev.md`, only the mock-workday pieces, through validation/plan. Commit and stop for review; do not push.
+- MW-D1 hard limit: never run Terraform apply/destroy, push images, or create AWS resources. Bootstrap/foundation are owned by the platform repository; read network IDs only through the specified SSM parameters.
 - `docs/spec.md` is the contract. If it is ambiguous, contradictory, or seems wrong, ask instead of inventing semantics. Record any agreed change in the spec in the same commit as the code.
 - Mock Workday must contain no agent, cell, or execution concepts. It is an ordinary multi-tenant enterprise service.
 - Its only interface to other systems is its versioned HTTP contract (OpenAPI document plus container image). Never design for shared code or database access with the runtime.
