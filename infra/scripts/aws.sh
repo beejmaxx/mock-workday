@@ -9,7 +9,7 @@ VARS="$ROOT/.local/aws-dev.tfvars.json"
 
 check_account() {
   local account
-  account="$(aws sts get-caller-identity --query Account --output text)"
+  account="$(aws sts get-caller-identity --query Account --output text </dev/null)"
   if [[ "$account" != 729608197929 ]]; then
     echo "Expected dev account 729608197929, got $account; stopping." >&2
     exit 1
@@ -53,9 +53,10 @@ case "${1:-}" in
     terraform -chdir="$REGISTRY" apply
     repository="$(terraform -chdir="$REGISTRY" output -raw repository_url)"
     tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image_tag"])' "$VARS")"
-    aws ecr get-login-password | docker login --username AWS --password-stdin "${repository%%/*}"
-    docker build --platform linux/arm64 -t "$repository:$tag" "$ROOT"
-    docker push "$repository:$tag"
+    # Preserve piped approval answers; docker login reads only the ECR password pipe.
+    aws ecr get-login-password </dev/null | docker login --username AWS --password-stdin "${repository%%/*}"
+    docker build --platform linux/arm64 -t "$repository:$tag" "$ROOT" </dev/null
+    docker push "$repository:$tag" </dev/null
     initialize "$SERVICE"
     terraform -chdir="$SERVICE" apply -var-file="$VARS"
     python3 "$ROOT/infra/scripts/migrate.py"
