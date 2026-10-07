@@ -19,9 +19,9 @@ def run(conn, sql, **params):
 
 
 class Database:
-    def __init__(self, app_url, owner_url):
+    def __init__(self, app_url, owner_url=None):
         self.app = create_engine(app_url)
-        self.owner = create_engine(owner_url)
+        self.owner = create_engine(owner_url) if owner_url is not None else None
 
     @contextmanager
     def tenant_tx(self, tenant_id, *, owner=False):
@@ -44,7 +44,8 @@ class Database:
 
     def close(self):
         self.app.dispose()
-        self.owner.dispose()
+        if self.owner is not None:
+            self.owner.dispose()
 
 
 def advisory_lock(conn, key):

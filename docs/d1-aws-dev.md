@@ -99,7 +99,10 @@ Prod; TLS and custom domains; CI/CD; Multi-AZ RDS; autoscaling; WAF; running the
   `mw_app` so the schema grants remain exact. Local defaults are unchanged.
 - Terraform creates the database; bootstrap provisions its roles and schema.
   The regular task starts only the app; only the separate migration task receives
-  the master password. The ALB probes `/openapi.json`; the wrapper also requires
+  the master password. The service receives the owner password only with
+  `enable_test_admin=true`; otherwise it runs with only app credentials and no
+  owner database engine. Migration always retains master, owner and app credentials.
+  The ALB probes `/openapi.json`; the wrapper also requires
   successful migration before reporting a healthy deployment.
 - ECS Exec task permission is limited to the four channel actions:
   `CreateControlChannel`, `CreateDataChannel`, `OpenControlChannel`, `OpenDataChannel`
@@ -110,3 +113,4 @@ Prod; TLS and custom domains; CI/CD; Multi-AZ RDS; autoscaling; WAF; running the
 | T-D1-01 | Database host/port/name environment settings and safely encoded passwords |
 | T-D1-02 | Non-superuser master bootstrap on a fresh database, then rerun without reseeding or rotating signing keys |
 | T-D1-03 | Missing login roles created without superuser/RLS bypass; rerun updates passwords |
+| T-D1-04 | Admin-disabled service starts, authenticates and reads workers with no owner credentials or owner engine; admin routes remain absent |

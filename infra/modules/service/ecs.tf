@@ -72,7 +72,7 @@ locals {
       }
     }
     environment = local.environment
-    secrets     = local.secrets
+    secrets     = [for secret in local.secrets : secret if var.enable_test_admin || secret.name != "MW_DB_OWNER_PASSWORD"]
   }
 }
 resource "aws_ecs_task_definition" "service" {

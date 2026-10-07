@@ -104,3 +104,41 @@ def test_T_D1_03_create_missing_roles(master_database):
         with engine.connect() as conn:
             for name in (owner, app):
                 run(conn, f"DROP ROLE IF EXISTS {name}")
+
+
+def test_T_D1_04_service_without_owner_credentials(env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from mock_workday import app
+
+    monkeypatch.setenv("MW_TEST_ADMIN", "0")
+    monkeypatch.delenv("MW_DB_OWNER_PASSWORD", raising=False)
+    monkeypatch.setattr(app, "APP_URL", env.db.app.url)
+    monkeypatch.setattr(app, "OWNER_URL", env.db.owner.url.set(password=None))
+    served = []
+
+    def serve(public, **kwargs):
+        db = public.state.service.db
+        assert db.owner is None
+        with db.app.connect() as conn:
+            assert one(conn, "SELECT current_user AS role")["role"] == "mw_app"
+        with TestClient(public, base_url="http://acme.mockworkday.local") as client:
+            response = client.post(
+                "/oauth2/token",
+                data={
+                    "grant_type": "password",
+                    "username": "alice",
+                    "password": "pw-alice",
+                },
+            )
+            assert response.status_code == 200, response.text
+            token = response.json()["access_token"]
+            assert (
+                client.get(env.worker("Bob"), headers=env.headers(token)).status_code
+                == 200
+            )
+            assert client.post("/admin/reset").status_code == 404
+        served.append(True)
+
+    monkeypatch.setattr(app.uvicorn, "run", serve)
+    app.main()
+    assert served == [True]

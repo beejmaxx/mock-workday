@@ -64,8 +64,9 @@ def create_apps(db, *, test_admin=False):
 
 
 def main():
-    db = Database(APP_URL, OWNER_URL)
-    public, private = create_apps(db, test_admin=os.getenv("MW_TEST_ADMIN") == "1")
+    test_admin = os.getenv("MW_TEST_ADMIN") == "1"
+    db = Database(APP_URL, OWNER_URL if test_admin else None)
+    public, private = create_apps(db, test_admin=test_admin)
     admin_server = None
     admin_thread = None
     if private:

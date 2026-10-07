@@ -179,8 +179,9 @@ a VPC, NAT gateway, endpoints, or the platform state bucket.
 The service has one ARM64 Fargate task, private PostgreSQL 17, and an HTTP ALB
 restricted to the chosen /32. Only port 8080 reaches the load balancer. The
 one-off migration task receives the RDS master password; the long-running service
-receives only the owner/app passwords. It starts the application directly without
-running the privileged bootstrap. Bootstrap creates missing roles, updates their
+receives the app password, plus the owner password only when test admin is enabled.
+With test admin disabled, the app creates no owner database engine. It starts the
+application directly without running the privileged bootstrap. Bootstrap creates missing roles, updates their
 passwords, and installs/seeds a fresh database without reseeding an existing one.
 The ALB health check uses `/openapi.json`; the migration must also succeed before
 `aws-up` reports success. Use `aws-smoke` to verify database-backed behavior.
