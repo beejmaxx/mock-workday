@@ -1,6 +1,6 @@
 # Mock Workday: detailed specification (v1)
 
-**Status:** draft for review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
+**Status:** M1 implemented; awaiting review. M2 has not started. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
 
 **Labels:**
 
@@ -579,6 +579,15 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
     position?: ref, annualSalary?, currency?, businessProcessEvent?: ref}]
   ```
 
+- **Organization:** `{id, descriptor, href, refId, superior: ref | null}`.
+- **Worker organizations:** the primary supervisory organization reference.
+- **Document metadata:** `{id, descriptor, href, title, domain, classification, owner: worker_ref | null, org: org_ref | null, created_at}`.
+  - Lists return metadata only. They never return `content`.
+  - `GET /documents/{id}` returns metadata plus `content`; confidential/restricted content reads are audited per §8.
+  - `POST /documents` takes `{title, content, domain, classification, owner_worker_id?, org_id?}` and returns **201** with document metadata. Content is returned only by the single-document GET.
+- **Delegation grant:** `{id, client_id, scopes, created_at, expires_at, revoked_at: timestamp | null}`.
+  - Creation returns **201**; listing returns an array of the caller's grants.
+
 **Direct reports [WD-inspired]:** workers whose organization (as of `as_of`) has a filled position holding `MANAGER` directly that belongs to `{wid}`, plus the managers of those organizations' immediate sub-organizations.
 
 ### 6.3 Pagination [Lab, decided]
@@ -669,7 +678,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 
 | Record | Written when | Transaction |
 |---|---|---|
-| `audit_authz` | Every sensitive read (compensation; history with compensation fields; documents ≥ CONFIDENTIAL), every write decision, every denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
+| `audit_authz` | Every sensitive read (compensation; history with compensation fields; single-document content reads ≥ CONFIDENTIAL; document lists return metadata only), every write decision, every denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
 | `audit_objects` | Every inserted revision, document, event status change, grant creation or revocation | Same transaction as the change |
 | `bp_history` | Every initiate, approve, deny, or cancel action | Same transaction |
 
@@ -872,7 +881,7 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-D-03 | Frank reads Bob's review | 404 |
 | T-D-04 | Carol creates a `DOC_ORG` document on Engineering with classification INTERNAL | 422 (below minimum) |
 | T-D-05 | Bob creates a `DOC_WORKER` document for himself | 403 (Self has VIEW only) |
-| T-D-06 | Exfiltration path: Carol reads Bob's compensation, then creates a `DOC_ORG` document containing it; Alice reads it | all 200 (documented composition gap) |
+| T-D-06 | Exfiltration path: Carol reads Bob's compensation, then creates a `DOC_ORG` document containing it; Alice reads it | compensation GET 200, document POST 201, document GET 200 (documented composition gap) |
 | T-D-07 | Confidential document read while audit writes fail. The test simulates the failure at the database: as `mw_owner`, `REVOKE INSERT ON audit_authz FROM mw_app`, run the read, then restore the grant. The HTTP fault API stays in M2. | 503, no content returned |
 
 ### M1: Pagination and rate limiting
@@ -900,6 +909,27 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-A-01 | Carol reads Bob's compensation | `audit_authz` row with matched group HR Partner, constraining org Engineering, `policy_version` |
 | T-A-02 | Bob is denied Alice | denial row |
 | T-A-03 | Grant creation and revocation | `audit_objects` rows |
+
+### M1: Additional coverage of the existing contract
+
+| ID | Scenario | Expected |
+|---|---|---|
+| T-ID-11 | Current client/grant scopes shrink after issuance; delegated and ISU tokens reused | current intersection enforced |
+| T-ID-12 | Grant management with ISU/delegated token; ownership, TTL bounds and expiry | direct human only; own grants only; TTL enforced |
+| T-ID-13 | Bad credentials, ISU password login, or client credentials on an unbound client | 401 |
+| T-ID-14 | Unknown host, missing bearer, caller/generated request ID | uniform error body and echoed request ID |
+| T-V-20 | HR Partner role assigned to a vacant position in Platform | does not prune Carol's reach |
+| T-V-21 | Manager group configured CURRENT_ONLY | sees Bob, not Grace |
+| T-V-22 | Worker organizations, organization detail/workers, direct reports | correct references, membership and authorization |
+| T-D-08 | Authorized document list | metadata only, no content; unauthorized documents omitted |
+| T-D-09 | Document target mismatch, UTF-8 content >64 KB, tenant-document write | 422 for invalid input; 403 for seed-only tenant writes |
+| T-D-10 | Document creation while object-audit INSERT fails | 503; document and authorization audit roll back |
+| T-P-07 | Document keyset pagination and filters; limit >200 | complete metadata scan; filters honored; invalid limit rejected |
+| T-E-03 | Two compensation revisions with the same effective date | latest recorded sequence wins |
+| T-A-04 | Delegated sensitive read | audit records human, client and grant |
+| T-AD-01 | Admin disabled or accessed through public app | absent; never on public app |
+| T-AD-02 | Reset after mutations | deterministic seed restored; keys regenerated; clock and limits reset |
+| T-AD-03 | Requests while the admin clock is enabled | no wall-clock drift; only set/advance moves time |
 
 ### M2: Business processes
 
