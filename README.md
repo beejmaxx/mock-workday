@@ -96,7 +96,7 @@ matched after recreation.
 Public API: `127.0.0.1:8080`. The tenant comes only from the HTTP Host header. No hosts-file change is needed:
 
 ```sh
-curl -s http://127.0.0.1:8080/oauth2/token \
+curl --noproxy "*" -s http://127.0.0.1:8080/oauth2/token \
   -H 'Host: acme.mockworkday.local' \
   -d grant_type=password -d username=alice -d password=pw-alice
 ```
@@ -160,13 +160,20 @@ terraform fmt -check -recursive infra
 After the platform is available:
 
 ```sh
-make aws-plan       # prompts for an IPv4 /32; default is your current public IP
+make aws-plan       # prompts for an IPv4 /32; default is your direct public egress IP
 # Stop here for user review of the plans. The following commands create/delete resources:
 make aws-up         # interactive Terraform applies, ARM64 build/push, migration, health wait
 make aws-smoke      # 200 worker read, 403 compensation, 404 cross-tenant, 401 revoked grant
 make aws-down       # interactive destroy of SERVICE ONLY, then leftover inventory
 make aws-leftovers  # read-only inventory; nonzero if leftovers remain
 ```
+
+API requests must bypass HTTP proxies: the `Host` header selects the tenant, and
+an HTTP proxy may rewrite it and break tenant routing. For manual requests, use
+`curl --noproxy "*"` and `-H 'Host: acme.mockworkday.local'`. IP detection also uses
+`curl --noproxy "*"`, matching `aws-smoke`, which bypasses proxies. Thus the default
+ALB /32 is your direct egress IP, not the proxy's IP, even when `HTTP_PROXY`,
+`HTTPS_PROXY`, or `ALL_PROXY` is set.
 
 `aws-plan` and `aws-up` save non-secret deployment inputs in the gitignored
 `.local/aws-dev.tfvars.json`. `MW_IMAGE_TAG` overrides the default Git commit tag.

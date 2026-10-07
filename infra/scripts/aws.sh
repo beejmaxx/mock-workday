@@ -19,7 +19,7 @@ check_account() {
 configure() {
   mkdir -p "$ROOT/.local"
   local current_ip cidr tag
-  current_ip="$(curl -fsS --max-time 10 https://checkip.amazonaws.com)"
+  current_ip="$(curl --noproxy "*" -fsS --max-time 10 https://checkip.amazonaws.com)"
   read -r -p "Allowed IPv4 /32 [${current_ip}/32]: " cidr
   cidr="${cidr:-${current_ip}/32}"
   tag="${MW_IMAGE_TAG:-$(git -C "$ROOT" rev-parse --short=12 HEAD)}"
