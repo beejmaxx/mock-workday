@@ -13,7 +13,7 @@ services:
       retries: 30
   service:
     build: .
-    image: mock-workday:m1
+    image: mock-workday:m2
     environment:
       MW_TEST_ADMIN: ${MW_TEST_ADMIN:-0}
     ports:

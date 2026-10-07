@@ -10,7 +10,13 @@ from .errors import APIError
 logger = logging.getLogger(__name__)
 
 
+def check_failure(conn):
+    if conn.info.pop("audit_write_failure", False):
+        raise APIError(503, "AUDIT_UNAVAILABLE")
+
+
 def authz_record(conn, p, request_id, action, domain, target, decision, now):
+    check_failure(conn)
     try:
         run(
             conn,
@@ -39,30 +45,56 @@ def authz_record(conn, p, request_id, action, domain, target, decision, now):
         raise APIError(503, "AUDIT_UNAVAILABLE") from exc
 
 
-def denial(db, p, request_id, action, domain, target, decision, now):
+def denial(db, p, request_id, action, domain, target, decision, now, *, fail=False):
     try:
         with db.tenant_tx(p.tenant_id) as conn:
+            if fail:
+                raise APIError(503, "AUDIT_UNAVAILABLE")
             authz_record(conn, p, request_id, action, domain, target, decision, now)
     except (SQLAlchemyError, APIError):
         logger.warning("Denial audit unavailable for request %s", request_id)
 
 
-def object_record(conn, p, request_id, object_type, object_id, field, old, new, now):
+def object_record(
+    conn, p, request_id, object_type, object_id, field, old, new, now, bp_event_id=None
+):
+    check_failure(conn)
     try:
         run(
             conn,
             """INSERT INTO audit_objects VALUES
-            (:id,:tid,:rid,:aid,:cid,:type,:oid,:field,CAST(:old AS jsonb),CAST(:new AS jsonb),NULL,:now)""",
+            (:id,:tid,:rid,:aid,:cid,:type,:oid,:field,CAST(:old AS jsonb),CAST(:new AS jsonb),:event,:now)""",
             id=uuid4(),
             tid=p.tenant_id,
             rid=request_id,
             aid=p.account_id,
             cid=p.client_id,
+            event=bp_event_id,
             type=object_type,
             oid=object_id,
             field=field,
             old=json.dumps(old, default=str),
             new=json.dumps(new, default=str),
+            now=now,
+        )
+    except SQLAlchemyError as exc:
+        raise APIError(503, "AUDIT_UNAVAILABLE") from exc
+
+
+def process_history(conn, p, event_id, action, step_key, comment, now):
+    check_failure(conn)
+    try:
+        run(
+            conn,
+            """INSERT INTO bp_history VALUES
+            (:id,:tid,:event,:action,:step,:aid,:cid,:comment,:now)""",
+            id=uuid4(),
+            event=event_id,
+            action=action,
+            step=step_key,
+            aid=p.account_id,
+            cid=p.client_id,
+            comment=comment,
             now=now,
         )
     except SQLAlchemyError as exc:

@@ -210,6 +210,10 @@ def test_T_DB_03_least_privilege_matrix(env):
         "delegation_grants",
         "audit_authz",
         "audit_objects",
+        "bp_events",
+        "bp_steps",
+        "bp_history",
+        "idempotency_records",
     )
     with env.db.tenant_tx(seed_id("acme", "tenant", "acme")) as conn:
         for table in read_only + insertable:
@@ -223,6 +227,7 @@ def test_T_DB_03_least_privilege_matrix(env):
                 assert allowed == (
                     privilege == "SELECT"
                     or (privilege == "INSERT" and table in insertable)
+                    or (privilege == "DELETE" and table == "idempotency_records")
                 ), (table, privilege)
         columns = rows(
             conn,
@@ -231,6 +236,26 @@ def test_T_DB_03_least_privilege_matrix(env):
               AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE')""",
         )
         assert [row["attname"] for row in columns] == ["revoked_at"]
+        for table, expected in {
+            "bp_events": {"status", "current_step", "version", "completed_at"},
+            "bp_steps": {
+                "status",
+                "acted_by",
+                "acted_by_client",
+                "acted_at",
+                "comment",
+            },
+            "idempotency_records": set(),
+            "bp_history": set(),
+        }.items():
+            columns = rows(
+                conn,
+                """SELECT attname FROM pg_attribute
+                WHERE attrelid=CAST(:table AS regclass) AND attnum>0 AND NOT attisdropped
+                  AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE')""",
+                table=table,
+            )
+            assert {row["attname"] for row in columns} == expected
 
 
 @pytest.mark.parametrize("table", ["audit_authz", "audit_objects"])

@@ -45,3 +45,7 @@ class Database:
     def close(self):
         self.app.dispose()
         self.owner.dispose()
+
+
+def advisory_lock(conn, key):
+    run(conn, "SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))", key=key)

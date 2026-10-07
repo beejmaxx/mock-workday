@@ -1,7 +1,7 @@
 # Project instructions
 
-- Current phase: implement **M1** exactly as specified in `docs/spec.md`. Then stop and report for review before starting M2.
-- No Terraform or AWS work in M1. AWS deployment is milestone D1 (spec §12), which gets its own spec first.
+- Current phase: implement **M2** exactly as specified in `docs/spec.md`. Then stop and report for review.
+- No Terraform or AWS work in M2. AWS deployment is milestone D1 (spec §12), which gets its own spec first.
 - `docs/spec.md` is the contract. If it is ambiguous, contradictory, or seems wrong, ask instead of inventing semantics. Record any agreed change in the spec in the same commit as the code.
 - Mock Workday must contain no agent, cell, or execution concepts. It is an ordinary multi-tenant enterprise service.
 - Its only interface to other systems is its versioned HTTP contract (OpenAPI document plus container image). Never design for shared code or database access with the runtime.

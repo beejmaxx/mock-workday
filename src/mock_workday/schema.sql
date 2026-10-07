@@ -234,6 +234,76 @@ CREATE INDEX compensation_as_of ON compensation_revisions (tenant_id,
 GRANT USAGE ON SCHEMA public TO mw_app;
 GRANT SELECT ON tenants, signing_keys TO mw_app;
 
+CREATE TABLE bp_events (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    type text NOT NULL CHECK (type IN ('CHANGE_JOB', 'REQUEST_TIME_OFF')),
+    subject_worker_id uuid NOT NULL,
+    initiator_account_id uuid NOT NULL,
+    initiator_client_id text,
+    status text NOT NULL CHECK (status IN ('IN_PROGRESS', 'SUCCESSFULLY_COMPLETED', 'DENIED', 'CANCELED')),
+    current_step int,
+    effective_date date,
+    payload jsonb NOT NULL,
+    comment text NOT NULL,
+    version int NOT NULL,
+    initiated_at timestamptz NOT NULL,
+    completed_at timestamptz,
+    UNIQUE (tenant_id, id),
+    FOREIGN KEY (tenant_id, subject_worker_id) REFERENCES workers (tenant_id, id),
+    FOREIGN KEY (tenant_id, initiator_account_id) REFERENCES accounts (tenant_id, id),
+    FOREIGN KEY (tenant_id, initiator_client_id) REFERENCES api_clients (tenant_id, client_id)
+);
+CREATE TABLE bp_steps (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    event_id uuid NOT NULL,
+    step_order int NOT NULL,
+    step_key text NOT NULL CHECK (step_key IN ('RECEIVING_MANAGER', 'COMPENSATION_PARTNER', 'MANAGER_APPROVAL')),
+    status text NOT NULL CHECK (status IN ('PENDING', 'AWAITING', 'APPROVED', 'DENIED', 'SKIPPED', 'CANCELED')),
+    initial_assignee_account_ids uuid[] NOT NULL,
+    acted_by uuid,
+    acted_by_client text,
+    acted_at timestamptz,
+    comment text,
+    UNIQUE (tenant_id, event_id, step_order),
+    FOREIGN KEY (tenant_id, event_id) REFERENCES bp_events (tenant_id, id),
+    FOREIGN KEY (tenant_id, acted_by) REFERENCES accounts (tenant_id, id),
+    FOREIGN KEY (tenant_id, acted_by_client) REFERENCES api_clients (tenant_id, client_id)
+);
+CREATE TABLE bp_history (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    event_id uuid NOT NULL,
+    action text NOT NULL,
+    step_key text,
+    actor_account_id uuid NOT NULL,
+    actor_client_id text,
+    comment text NOT NULL,
+    at timestamptz NOT NULL,
+    FOREIGN KEY (tenant_id, event_id) REFERENCES bp_events (tenant_id, id),
+    FOREIGN KEY (tenant_id, actor_account_id) REFERENCES accounts (tenant_id, id),
+    FOREIGN KEY (tenant_id, actor_client_id) REFERENCES api_clients (tenant_id, client_id)
+);
+CREATE TABLE idempotency_records (
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    account_id uuid NOT NULL,
+    client_key text NOT NULL,
+    idem_key text NOT NULL CHECK (length(idem_key) BETWEEN 1 AND 128),
+    request_hash text NOT NULL,
+    operation_id uuid NOT NULL,
+    status_code int NOT NULL,
+    receipt jsonb NOT NULL,
+    response jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id, account_id, client_key, idem_key),
+    FOREIGN KEY (tenant_id, account_id) REFERENCES accounts (tenant_id, id)
+);
+ALTER TABLE job_revisions ADD FOREIGN KEY (tenant_id, bp_event_id) REFERENCES bp_events (tenant_id, id);
+ALTER TABLE compensation_revisions ADD FOREIGN KEY (tenant_id, bp_event_id) REFERENCES bp_events (tenant_id, id);
+CREATE INDEX pending_change_subject ON bp_events (tenant_id, subject_worker_id) WHERE type='CHANGE_JOB';
+
 ALTER TABLE tenant_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_config FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON tenant_config
@@ -355,3 +425,30 @@ CREATE POLICY tenant_isolation ON audit_objects
 GRANT SELECT, INSERT ON audit_objects TO mw_app;
 
 GRANT USAGE ON SEQUENCE job_revisions_recorded_seq_seq, compensation_revisions_recorded_seq_seq TO mw_app;
+
+ALTER TABLE bp_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bp_events FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON bp_events
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON bp_events TO mw_app;
+GRANT UPDATE (status, current_step, version, completed_at) ON bp_events TO mw_app;
+ALTER TABLE bp_steps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bp_steps FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON bp_steps
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON bp_steps TO mw_app;
+GRANT UPDATE (status, acted_by, acted_by_client, acted_at, comment) ON bp_steps TO mw_app;
+ALTER TABLE bp_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bp_history FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON bp_history
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON bp_history TO mw_app;
+ALTER TABLE idempotency_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE idempotency_records FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON idempotency_records
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT, DELETE ON idempotency_records TO mw_app;

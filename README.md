@@ -2,7 +2,7 @@
 
 A small, multi-tenant HCM service modeled on public Workday concepts: supervisory organizations, Position Management, role-based constrained security, domain permissions, effective dating, and audit.
 
-**Status:** M1 implemented. M2 business processes, idempotency, and fault injection are not implemented. AWS deployment is a separate, deferred milestone.
+**Status:** M1 and M2 implemented, including Change Job, Request Time Off, idempotency, and fault injection. AWS deployment is a separate, deferred milestone.
 
 This is an independent learning project, not affiliated with or endorsed by Workday. It uses synthetic data only. Workday facts, Workday-inspired concepts, and lab policy are distinguished in the [specification](docs/spec.md) and [verification notes](docs/workday-verification.md).
 
@@ -31,7 +31,7 @@ MW_TEST_ADMIN=1 make up
 make down
 ```
 
-The image is tagged `mock-workday:m1`. Schema and seed are installed on the first startup of a fresh volume. `make down` removes that volume; the next `make up` reproduces the seed IDs. Signing keys and runtime-created records are regenerated.
+The image is tagged `mock-workday:m2`. Schema and seed are installed on the first startup of a fresh volume. `make down` removes that volume; the next `make up` reproduces the seed IDs. Signing keys and runtime-created records are regenerated.
 
 Public API: `127.0.0.1:8080`. The tenant comes only from the HTTP Host header. No hosts-file change is needed:
 
@@ -45,7 +45,7 @@ Use the returned access token with `Authorization: Bearer <token>` on `/api/v1/w
 
 Human passwords are `pw-<username>`. Client secrets are `secret-<client_id>` for `assistant`, `hr-assistant`, `directory-sync`, and `eng-sync`. All are synthetic lab credentials. The fixed Compose database credentials are documented in spec §10; there are no external secrets to configure.
 
-The test-admin app exists only with `MW_TEST_ADMIN=1` and uses port 8081. Its routes never appear on the public app. With it enabled, time starts at `2026-10-07T09:00:00Z` and moves only through `/admin/clock`; otherwise time progresses from that seed instant. `/admin/reset` restores both tenants, the clock, keys, and rate-limit state.
+The test-admin app exists only with `MW_TEST_ADMIN=1` and uses port 8081. Its routes never appear on the public app. With it enabled, time starts at `2026-10-07T09:00:00Z` and moves only through `/admin/clock`; otherwise time progresses from that seed instant. `/admin/reset` restores both tenants, the clock, keys, rate-limit state, and fault rules.
 
 ## Contract and boundaries
 
@@ -55,6 +55,8 @@ The test-admin app exists only with `MW_TEST_ADMIN=1` and uses port 8081. Its ro
 - Sensitive reads and writes require durable audit; audit failure rolls back and returns 503. Denial auditing is best effort.
 - Document creation returns 201. Lists return metadata only; content is returned by the individual-document GET.
 - Lists use signed keyset cursors and current authorization. Rate limits are in-process and per tenant/client or direct human account.
+- Change Job and Request Time Off use current assignees, optimistic versions, and transaction-scoped locks. Final changes and audit records commit together.
+- Business-process POSTs require `Idempotency-Key`. Successful retries return the original receipt; current authorization controls protected fields, and revoked grants or disabled clients prevent replay.
 - One service process serves both ports. This small lab intentionally uses direct SQL and plain functions; pagination may inspect all candidate rows and is not optimized for large datasets.
 
 Other systems consume only the versioned HTTP contract and container image. There is no shared database or code interface.

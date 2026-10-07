@@ -68,6 +68,7 @@ def reset(request: Request):
     seed(service.db)
     service.clock.set(SEED_TIME)
     service.rate_limits.reset()
+    service.faults.clear()
     return {"reset": True}
 
 
@@ -171,3 +172,45 @@ def rate_limit(request: Request, body: RateBody):
         body.refill_per_second,
     )
     return {"configured": True}
+
+
+class FaultMatch(BaseModel):
+    method: str
+    path_prefix: str
+    client_id: str | None = None
+
+
+class FaultBody(TenantBody):
+    match: FaultMatch
+    type: Literal[
+        "latency",
+        "status",
+        "timeout_before_commit",
+        "timeout_after_commit",
+        "audit_write_failure",
+    ]
+    value: int | None = None
+    count: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def fault_value(self):
+        if self.type == "latency" and (self.value is None or self.value < 0):
+            raise ValueError("Latency must be nonnegative milliseconds")
+        if self.type == "status" and self.value not in (429, 503):
+            raise ValueError("Status must be 429 or 503")
+        return self
+
+
+@router.post("/faults", status_code=201)
+def add_fault(request: Request, body: FaultBody):
+    service = request.app.state.service
+    rule = body.model_dump(exclude={"slug"})
+    rule["match"]["method"] = rule["match"]["method"].upper()
+    service.faults.add(tenant_id(service, body.slug), rule)
+    return {"configured": True}
+
+
+@router.delete("/faults", status_code=204)
+def clear_faults(request: Request, body: TenantBody):
+    service = request.app.state.service
+    service.faults.clear(tenant_id(service, body.slug))

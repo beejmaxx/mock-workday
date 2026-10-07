@@ -1,6 +1,6 @@
 # Mock Workday: detailed specification (v1)
 
-**Status:** M1 implemented; awaiting review. M2 has not started. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
+**Status:** M1 approved. M2 implemented; awaiting review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
 
 **Labels:**
 
@@ -42,10 +42,10 @@ mock-workday/
 │   ├── seed.py
 │   ├── ids.py            # WID generation
 │   ├── errors.py
-│   ├── auth/             # tokens, keys, principals, grants
-│   ├── authz/            # security groups, reach, decisions
+│   ├── auth.py           # tokens, keys, principals, grants
+│   ├── authz.py          # security groups, reach, decisions
 │   ├── api/              # routers: oauth, workers, orgs, documents, bp, grants
-│   ├── bp/               # business-process engine (M2)
+│   ├── bp.py             # Change Job and Request Time Off (M2)
 │   ├── audit.py
 │   ├── idempotency.py    # (M2)
 │   ├── ratelimit.py
@@ -91,7 +91,9 @@ mock-workday/
   - `SELECT` only on reference/configuration tables: `tenant_config`, `organizations`, `positions`, `workers`, `accounts`, `role_assignments`, `security_groups`, `api_clients`, `integration_group_members`, `integration_group_orgs`, and `domain_grants`.
   - `SELECT, INSERT` on `job_revisions`, `compensation_revisions`, and `documents`; no `UPDATE` or `DELETE`. Revisions are append-only to preserve effective-dated history and stable pagination.
   - `SELECT, INSERT` plus column-level `UPDATE (revoked_at)` on `delegation_grants`; no other updates or deletes.
-  - `INSERT, SELECT` only on audit tables; no `UPDATE` or `DELETE`.
+  - `SELECT, INSERT` on `bp_events` plus column-level `UPDATE (status, current_step, version, completed_at)`; on `bp_steps` plus `UPDATE (status, acted_by, acted_by_client, acted_at, comment)`. No deletes.
+  - `SELECT, INSERT, DELETE` on `idempotency_records`; deletion is only for expired keys. No placeholder records or updates.
+  - `INSERT, SELECT` only on audit tables (including `bp_history`); no `UPDATE` or `DELETE`.
   - `USAGE` only on the two revision sequences, for inserts.
 - **Admin mutations** (role assignments, account/client disabling, policy-version changes, and reset) run as `mw_owner`, not `mw_app`.
 
@@ -162,7 +164,8 @@ bp_events(id, tenant_id, type CHANGE_JOB|REQUEST_TIME_OFF, subject_worker_id,
           initiator_account_id, initiator_client_id null, status,
           current_step int null, effective_date date null, payload jsonb,
           comment text, version int, initiated_at, completed_at null)
-bp_steps(id, tenant_id, event_id, step_order, step_key, status, acted_by null,
+bp_steps(id, tenant_id, event_id, step_order, step_key, status,
+         initial_assignee_account_ids uuid[], acted_by null,
          acted_by_client null, acted_at null, comment null)
     -- status: PENDING | AWAITING | APPROVED | DENIED | SKIPPED | CANCELED
 idempotency_records(tenant_id, account_id, client_key text, idem_key,
@@ -417,7 +420,7 @@ IN_PROGRESS → SUCCESSFULLY_COMPLETED | DENIED | CANCELED
 - The initiator can never approve.
 - Delegated actors also need the scope for the process (§3.5).
 - **Concurrency:** step actions carry `expected_step` and `expected_version`. A mismatch returns 409 `VERSION_CONFLICT`. Every transition increments `version`.
-- **Lock order:** the event row, then the worker row (`SELECT ... FOR UPDATE`). Initiation locks only the worker row.
+- **Global lock order:** idempotency key, event row (actions only), worker, destination position (Change Job initiation and final approval only). Never acquire in another order. Keep `SELECT ... FOR UPDATE` on `bp_events`. Other locks are transaction-scoped advisory locks: `pg_advisory_xact_lock(hashtextextended(key, 0))`, with keys `idem:<tenant>:<account>:<client_key>:<key>`, `worker:<tenant>:<wid>`, and `position:<tenant>:<pid>`. Hash collisions only over-serialize, which is acceptable. No row UPDATE grant is needed for worker or position locks.
 
 ### 5.2 Assignee resolution [Lab]
 
@@ -444,15 +447,15 @@ POST /api/v1/business-processes/change-job
 
 **Initiation (one transaction):**
 
-1. Lock the worker row.
+1. Acquire the worker advisory lock (after the idempotency lock).
 2. **Authorize:**
    - The initiator is a member, via §4.3 against the subject, of a group allowed to initiate. Seed: Manager and HR Partner role groups.
    - Delegated callers need `staffing`, plus `compensation` if a compensation change is included.
 3. **Validate:**
    - `effective_date >= today`.
    - The target position exists in this tenant and differs from the current position.
-   - The target position is vacant as of `effective_date`, and no pending Change Job targets it.
-   - Compensation, if present: salary greater than 0 and a valid currency.
+   - Acquire the destination-position advisory lock after the worker lock; under it, check that the position is vacant as of `effective_date` and no pending Change Job targets it.
+   - Compensation, if present: salary greater than 0 (fits `numeric(12,2)`) and a valid ISO 4217 code from the frozen [SIX current list](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml), retrieved 2026-10-07 [Lab validation policy].
 4. **One pending Change Job per worker:** reject with 409 `PENDING_CHANGE_EXISTS` if another `CHANGE_JOB` for the subject is `IN_PROGRESS`, or `SUCCESSFULLY_COMPLETED` with `effective_date > today`.
 5. Insert the event, steps, process history, and audit records.
 6. Store the idempotency record (§6.4).
@@ -464,12 +467,12 @@ POST /api/v1/business-processes/change-job
 | 1 | `RECEIVING_MANAGER` | `DIRECT_MANAGER(target_position.org)` | always |
 | 2 | `COMPENSATION_PARTNER` | `ROLE_WITH_REACH(COMPENSATION_PARTNER, target_position.org)` | compensation present; otherwise `SKIPPED` |
 
-**Final approval (one transaction; lock the event, then the worker):**
+**Final approval (one transaction; follow the global lock order in §5.1):**
 
-1. Check the version and step.
+1. Check visibility, status, then version and step, in §5.1 order.
 2. Check that the actor is the assignee (§5.2) at action time.
 3. **Effective-date check:** if `effective_date < today`, return 409 `EFFECTIVE_DATE_PASSED` and change nothing. This check also applies to every non-final approval. Deny and cancel remain allowed.
-4. Re-check that the target position is vacant as of `effective_date`.
+4. Acquire the destination-position advisory lock after the worker lock; re-check vacancy as of `effective_date` and pending events under that lock.
 5. Insert `job_revisions` (`effective_date`, `bp_event_id`) and, if present, `compensation_revisions`.
 6. Set the status to `SUCCESSFULLY_COMPLETED` and `completed_at`.
 7. Write history and object audit.
@@ -500,14 +503,14 @@ POST /api/v1/business-processes/request-time-off
 
 - the initiator;
 - the subject;
-- any account assigned to or acting on any step, past or current;
+- any initial assignee, current eligible assignee, or recorded actor on any step. Store initial assignee account IDs per step as an array (including all `ROLE_WITH_REACH` matches) for visibility only; actions always require current authority;
 - principals whose memberships against the subject (now) match a group with read on the event's domain:
   - `WORKER_ORGANIZATIONS` for Change Job;
   - `ABSENCE` for Time Off.
 
 **Field filtering:**
 
-- `payload.compensation` and step comments on the compensation step are returned only to principals with `WORKER_COMPENSATION` read on the subject now, or to the `COMPENSATION_PARTNER` step's assignee or actor. Priya's receiving-manager step therefore shows the move without the salary.
+- `payload.compensation` and step comments on the compensation step are returned only to principals with `WORKER_COMPENSATION` read on the subject now, or to a current eligible assignee of an `AWAITING` compensation step, with the required scopes. Past participation grants event visibility only, never compensation disclosure. Priya's receiving-manager step therefore shows the move without the salary.
 - Time Off `reason` is visible to the same set of principals as the event itself.
 
 ### 5.6 Event endpoints
@@ -517,6 +520,10 @@ POST /api/v1/business-processes/request-time-off
 - `POST /api/v1/business-process-events/{id}/approve`
 - `POST /api/v1/business-process-events/{id}/deny`
 - `POST /api/v1/business-process-events/{id}/cancel`
+
+Initiations return 201; actions return 200. Their body is `{operation_id, status, resource: ref, event}`. A replay always returns at least `{operation_id, status, resource: ref}`; stored event fields require current disclosure authorization.
+
+Event responses contain the `bp_events` fields in §2.1 except `tenant_id`, plus `id`, `descriptor`, `href`, and `steps`. Each step contains `id`, `step_order`, `step_key`, `status`, `initial_assignee_account_ids`, `current_assignee_account_ids`, `acted_by`, `acted_by_client`, `acted_at`, and `comment` (subject to disclosure filtering). `expected_step` is the step key, not its numeric order.
 
 The action endpoints take the body `{"expected_step", "expected_version", "comment"}` and require an `Idempotency-Key`.
 
@@ -624,15 +631,15 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 - **Processing order (one transaction):**
   1. Authenticate (§3.3). A revoked grant or disabled client returns 401, even for a replay.
   2. Compute `request_hash = sha256(method, path, canonical JSON body)`.
-  3. Run `SELECT … FOR UPDATE` on `(tenant, account, client_key, key)`, ignoring expired records.
+  3. Acquire the transaction-scoped idempotency advisory lock (§5.1), then read `(tenant, account, client_key, key)`, ignoring expired records.
      - **Exists with a different hash:** 422 `IDEMPOTENCY_KEY_REUSED`.
      - **Exists:**
        - Return the original status code with header `Idempotent-Replay: true` and the stored **receipt** `{operation_id, status, resource: ref}`.
        - The receipt is returned without re-running business authorization; it is never executed again.
        - Any additional stored response fields are included only if the caller's current read authorization permits them (for example, a compensation value).
      - **Absent:**
-       - Insert the record. A concurrent duplicate blocks on the primary key and then sees the completed record.
-       - Perform the operation and store the receipt.
+       - Delete any expired record with this binding. Perform the operation.
+       - Insert the completed record and receipt at the end of the transaction while holding the key lock; no placeholder and no UPDATE. A concurrent duplicate blocks on the key lock, then replays. The primary key remains a backstop.
        - Commit atomically with the operation.
 - **Only successful operations are recorded.** A failed attempt changed nothing, so a retry re-evaluates.
 - **Retention:** 24 hours by clock. An expired key is treated as new.
@@ -691,7 +698,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 | `bp_history` | Every initiate, approve, deny, or cancel action | Same transaction |
 
 - Non-sensitive allowed reads (basic worker data, organizations, positions) are not audited in v1.
-- Rows filtered out of worker or document lists are not denials and write no `audit_authz` records. List membership uses a non-auditing authorization check; a direct request denied access still produces a denial record.
+- Rows filtered out of worker, document, or event lists are not denials and write no `audit_authz` records. List membership uses a non-auditing authorization check; a direct request denied access still produces a denial record.
 - Tests read audit tables directly. An audit API is deferred until the runtime needs correlation.
 
 ---
@@ -954,18 +961,26 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-B-05 | After Nov 1: Alice reads Bob `as_of=2026-10-15` | 404 (current authority) |
 | T-B-06 | Carol initiates while Alice's event is pending | 409 `PENDING_CHANGE_EXISTS` |
 | T-B-07 | Two concurrent initiations for Bob (threads) | exactly one 201, one 409 |
-| T-B-08 | Approve versus deny race with the same `expected_version` | one succeeds, one 409 `VERSION_CONFLICT` |
+| T-B-08 | Approve versus deny race with the same `expected_version` | one succeeds; loser gets 409 `INVALID_STATE` if the winner made the event terminal, otherwise `VERSION_CONFLICT` |
 | T-B-09 | Final approval after the effective date (advance clock to Nov 2) | 409 `EFFECTIVE_DATE_PASSED`; no revisions; cancel succeeds |
 | T-B-10 | Alice tries to approve her own initiated event | 403 |
 | T-B-11 | Bob tries to approve or deny his own event | 403 |
 | T-B-12 | Change Job without compensation | compensation step SKIPPED; completes after Priya |
 | T-B-13 | Target position occupied as of the effective date | 409 `POSITION_OCCUPIED` |
 | T-B-14 | Alice (D, `assistant` with `staffing` only) initiates with compensation | 403 (scope) |
+| T-B-15 | Two different workers concurrently target the same vacant position | exactly one 201; loser 409 `POSITION_OCCUPIED` |
+| T-B-16 | Connie loses subject compensation reach; receiving step then compensation step completes | compensation hidden while PENDING, visible while currently eligible and AWAITING, hidden after completion; event remains visible |
+| T-B-17 | Event list filters, awaiting_me, pagination, and hidden rows | current visibility and field filtering; no denial audit for omitted rows |
+| T-B-18 | Invalid Change Job date, salary, or currency | 422 |
+| T-B-19 | Destination becomes occupied before final approval | 409 POSITION_OCCUPIED; event unchanged |
+| T-B-20 | Globex principal reads or acts on Acme event | 404; event unchanged |
+| T-B-21 | Direct manager is initiator; ancestor manager present or absent | route upward; missing manager stalls, cancel remains available |
 | T-T-01 | Bob requests time off; Alice approves | completed |
 | T-T-02 | Bob's request pending across his Nov 1 transfer: Alice approves after Nov 1 | 403; Priya succeeds |
 | T-T-03 | Cancel versus approve race | one wins, one 409 |
 | T-T-04 | Frank reads Bob's time-off reason | 404 |
 | T-T-05 | Grace's seeded request: Frank (direct manager) sees the reason, which contains injection text | 200 (the text is data) |
+| T-T-06 | Invalid time-off range, another worker as initiator, valid past dates | 422, 403, 201 respectively |
 
 ### M2: Idempotency and faults
 
@@ -979,7 +994,12 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-I-06 | Delegated approve with `timeout_after_commit`; grant revoked; retry | 401 |
 | T-I-07 | Replay after 24 hours (advance clock) | treated as new; business rules apply (e.g. 409 `INVALID_STATE`) |
 | T-I-08 | Two concurrent requests with the same key | one executes; the other receives a replay or blocks then replays |
+| T-I-09 | Missing/overlong key; same JSON with reordered keys and whitespace | 400; canonical-body replay |
+| T-I-10 | Client disabled after successful delegated action; replay | 401 |
+| T-I-11 | Successful delegated action, then grant scopes removed while grant remains active | minimal receipt replay, no event fields and no re-execution |
 | T-F-01 | `latency`, `status` 503, and 429 faults apply only to matching requests and only `count` times | as stated |
+| T-F-02 | Injected audit failure on write, sensitive read, and denied read | 503 with rollback, 503, original denial; subsequent request succeeds |
+| T-F-03 | Final revision audit fails in PostgreSQL | revisions, history, transition, and idempotency receipt roll back together; retry succeeds |
 
 ---
 

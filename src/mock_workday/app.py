@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
 from starlette.exceptions import HTTPException
 
-from .api import admin, documents, grants, oauth, workers
+from .api import admin, bp, documents, grants, oauth, workers
 from .api.models import ErrorBody
 from .config import APP_URL, OWNER_URL
 from .db import Database
@@ -29,7 +29,7 @@ def create_apps(db, *, test_admin=False):
             dependencies=[Depends(correlation)],
             responses={
                 code: {"model": ErrorBody}
-                for code in (400, 401, 403, 404, 422, 429, 503)
+                for code in (400, 401, 403, 404, 409, 422, 429, 503, 504)
             },
         )
         result.state.service = service
@@ -54,7 +54,7 @@ def create_apps(db, *, test_admin=False):
     public = app("Mock Workday API")
     public.include_router(oauth.router)
     bearer = HTTPBearer(auto_error=False)
-    for router in (grants.router, workers.router, documents.router):
+    for router in (grants.router, workers.router, documents.router, bp.router):
         public.include_router(router, dependencies=[Depends(bearer)])
     private = None
     if test_admin:

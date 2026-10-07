@@ -10,6 +10,7 @@ from .clock import Clock
 from .db import one
 from .errors import APIError, request_id
 from .ratelimit import RateLimits
+from .faults import Faults, start_faults, timeout
 
 
 @dataclass
@@ -37,14 +38,14 @@ class Context:
             target,
             decision,
             self.now,
+            fail=self.conn.info.pop("audit_write_failure", False),
         )
         raise APIError(404, "NOT_FOUND")
 
     def visible_in_list(self, domain, target):
         return authorize(self.conn, self.p, "READ", domain, target, self.now).allowed
 
-    def check(self, action, domain, target, *, sensitive=False):
-        decision = authorize(self.conn, self.p, action, domain, target, self.now)
+    def record_decision(self, action, domain, target, decision, *, sensitive=False):
         if not decision.allowed:
             audit.denial(
                 self.service.db,
@@ -55,6 +56,7 @@ class Context:
                 target,
                 decision,
                 self.now,
+                fail=self.conn.info.pop("audit_write_failure", False),
             )
         elif action == "WRITE" or sensitive:
             audit.authz_record(
@@ -68,6 +70,12 @@ class Context:
                 self.now,
             )
         return decision.allowed
+
+    def check(self, action, domain, target, *, sensitive=False):
+        decision = authorize(self.conn, self.p, action, domain, target, self.now)
+        return self.record_decision(
+            action, domain, target, decision, sensitive=sensitive
+        )
 
     def require(self, action, domain, target, *, sensitive=False, status=403):
         if not self.check(action, domain, target, sensitive=sensitive):
@@ -97,6 +105,7 @@ class Context:
                 target,
                 decision,
                 self.now,
+                fail=self.conn.info.pop("audit_write_failure", False),
             )
             raise APIError(403, "FORBIDDEN")
         if action == "WRITE":
@@ -117,6 +126,7 @@ class Service:
         self.db = db
         self.clock = Clock(controlled=test_admin)
         self.rate_limits = RateLimits()
+        self.faults = Faults()
         self.cursor_secret = token_bytes(32)
 
     def tenant(self, request):
@@ -138,4 +148,13 @@ class Service:
                 conn, tenant, request.headers.get("authorization", ""), now
             )
             self.rate_limits.check(p, now)
-            yield Context(self, conn, tenant, p, now, request_id(request))
+            rules = self.faults.take(
+                tenant["id"], request.method, request.url.path, p.client_id
+            )
+            try:
+                start_faults(rules, conn)
+                yield Context(self, conn, tenant, p, now, request_id(request))
+                timeout(rules, "timeout_before_commit")
+            finally:
+                conn.info.pop("audit_write_failure", None)
+        timeout(rules, "timeout_after_commit")
