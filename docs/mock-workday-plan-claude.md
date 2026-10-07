@@ -7,10 +7,12 @@
 - structured HR data
 - sensitive documents
 - contextual authorization
-- one consequential, effective-dated workflow
+- one low-risk self-service workflow and one consequential, effective-dated workflow
 - strong audit semantics
 
 Once that works, its API is versioned and kept stable. Everything else interesting belongs in the Agent Cell Runtime.
+
+**Boundary rule:** Mock Workday exposes operation shapes; the Agent Cell Runtime owns execution patterns. For example, Mock Workday paginates and throttles, while the runtime decides to run a bulk agent, back off, and checkpoint. Likewise, Mock Workday offers self-service actions, while the runtime decides whether an agent may perform them automatically.
 
 ## Purpose
 
@@ -50,8 +52,23 @@ customer agents (untrusted)  ->  Agent Cell Runtime  ->  Mock Workday API  ->  M
 2. A minimal HCM graph
 3. Security
 4. Documents
-5. Exactly one business process: narrowed Change Job
+5. Two business processes: Request Time Off (low risk) and narrowed Change Job (high consequence)
 6. Audit
+
+### Operation shapes covered
+
+These are the kinds of interaction the runtime must handle, independent of which Workday application a customer uses. Payroll, recruiting, expenses, and accounting mostly produce more instances of the same shapes.
+
+| # | Shape | Example | Provided by |
+|---|---|---|---|
+| 1 | Ordinary personal read | "Who is my manager?" | Mock Workday |
+| 2 | Sensitive read | "What is my compensation?" | Mock Workday |
+| 3 | Protected unstructured read | "What does the compensation policy say?" | Mock Workday |
+| 4 | Low-risk delegated write | "Request Friday off." | Mock Workday |
+| 5 | Consequential multi-party write | "Move Bob to Finance and change his salary." | Mock Workday |
+| 6 | Bulk paginated read | "Scan all workers I am authorized to see." | Mock Workday |
+| 7 | Autonomous principal | An integration identity, not a human | Mock Workday |
+| 8 | External irreversible side effect | Send an email | **Agent Cell Runtime** (fake tools), not Mock Workday |
 
 ## 1. Tenancy and identity
 
@@ -181,9 +198,22 @@ Document
 - At least one document contains prompt-injection text.
 - Globex: entirely different documents.
 
-## 5. Business process: narrowed Change Job
+## 5. Business processes
 
-### Example
+Two processes share one small process model: a low-risk self-service request and a consequential multi-party change. The contrast lets the runtime later apply different risk and confirmation policies, e.g. "Bob asked his agent to request Friday off" versus "Bob's agent wants to change someone else's compensation."
+
+### Request Time Off (low risk)
+
+```text
+TimeOffRequest
+  worker_id, start_date, end_date, reason (free text), status
+```
+
+- The employee initiates for themselves; their manager approves or denies.
+- The employee may cancel while the request is in progress.
+- No balances, accruals, calendars, carryover, or regional policy.
+
+### Change Job (high consequence): example
 
 - Move Bob from Engineering to Finance, optionally changing salary from 120k to 140k, effective Nov 1.
 - One operation changes:
@@ -196,8 +226,8 @@ Document
 ### Engine
 
 - Process steps and assigned security groups are seeded per tenant.
-- There is no configuration API or UI. The data model can describe multiple process types, but only one exists.
-- **Guardrail:** build only what Change Job requires. If the work starts turning into a general-purpose workflow engine, stop.
+- There is no configuration API or UI. The data model can describe multiple process types; v1 has exactly two.
+- **Guardrail:** build only what these two processes require. If the work starts turning into a general-purpose workflow engine, stop.
 
 ### Event model
 
@@ -212,7 +242,7 @@ IN_PROGRESS(step n) -> SUCCESSFULLY_COMPLETED | DENIED | CANCELED
 
 The effect is applied in the same transaction as the final step, so "approved but not applied" never exists.
 
-### Routing (decided, lab policy)
+### Change Job routing (decided, lab policy)
 
 1. **Initiate:** Bob's current manager (Alice) or his HR Partner (Carol). Two authority paths for the same action.
 2. **Receiving manager approval:** Priya, the Finance manager, must approve moves into her organization.
@@ -230,7 +260,8 @@ Before the effective date, Priya has no domain access to Bob, yet she must appro
 
 - The actor's authority is checked when they act, not when the process began.
 - Initiators cannot approve their own step.
-- Subjects cannot act on their own events.
+- Subjects cannot approve or deny their own events.
+- Initiators may cancel an event while it is in progress.
 
 ### Access switchover
 
@@ -245,6 +276,13 @@ Before Nov 1, Alice still sees Bob and the Finance manager does not. On and afte
 - **Optimistic concurrency:** step actions name the expected step and event version; a lost race returns 409.
 - **Error semantics** documented for 401, 403, 404, 409, 429, and 503.
 - **Correlation:** caller-supplied request IDs are recorded in audit and grant no authority.
+- **Pagination:** list endpoints (e.g. `GET /workers?org=...&limit=50&cursor=...`) use opaque cursors over a stable order.
+  - Authorization is evaluated on every page, so access lost mid-scan takes effect on the next page.
+  - Cursors are bound to the caller and tenant.
+  - Cursor expiry and behavior when data changes between pages are specified, not accidental.
+- **Rate limiting:** per API client per tenant.
+  - Deterministic and testable: driven by the controllable clock.
+  - Returns 429 with `Retry-After`.
 
 ## 6. Audit
 
@@ -285,8 +323,8 @@ Python, FastAPI, PostgreSQL, SQLAlchemy, pytest, and Docker Compose.
 
 | Milestone | Scope | Exit evidence |
 |---|---|---|
-| **M1: Foundation** | Tenancy and identity (including delegation), the HCM graph with effective dating, security, documents, authorized read APIs and history, object and authorization-decision audit | Visibility matrix passes: self, inheritance, siblings, cross-tenant, compensation separation, document domains, delegation intersection, as-of reads, and role revocation mid-session |
-| **M2: Change Job** | Process model, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny race, lost response after commit, conflicting key reuse, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
+| **M1: Foundation** | Tenancy and identity (including delegation), the HCM graph with effective dating, security, documents, authorized read APIs and history, paginated listing, rate limiting, object and authorization-decision audit | Visibility matrix passes: self, inheritance, siblings, cross-tenant, compensation separation, document domains, delegation intersection, as-of reads, and role revocation mid-session. Bulk-scan contract passes: an integration user pages through the Acme workers it may see, receives deterministic 429s with `Retry-After`, continues with its cursor without duplicates or gaps, and loses access mid-scan when its permissions are revoked |
+| **M2: Actions** | Process model, Request Time Off, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny race, lost response after commit, conflicting key reuse, employee cancellation, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
 
 After M2, the Agent Cell Runtime begins. Mock Workday changes only through versioned API changes the runtime needs.
 
@@ -303,9 +341,16 @@ Acme:   Dana (CEO, Executive)
 Globex: Dave (Manager) └─ Eve
 ```
 
+## Belongs to the Agent Cell Runtime, not Mock Workday
+
+- Scheduling: "every night at 02:00, launch the payroll audit agent."
+- Execution patterns: backoff on 429, checkpointing bulk scans, resuming after a crash.
+- Risk tiers: which operations an agent may perform automatically and which need human confirmation.
+- External side-effect tools: `send_email`, web requests, other SaaS APIs, and model providers. These enable composition tests such as "the agent may read Bob's salary and may send email; can it email Bob's salary outside the company?"
+
 ## Backlog (not before the runtime)
 
-- Request Time Off
+- **Change bank details (first addition after M2):** combines a sensitive write, financial consequence, social engineering, prompt injection, human confirmation, fraud detection, and audit. Payroll diversion through a manipulated agent is the realistic version of "prompt injection causes harm." It requires a new payment domain, so it does not block the runtime.
 - Termination
 - Hire
 - Rescind
@@ -321,6 +366,8 @@ Globex: Dave (Manager) └─ Eve
 - Admin UI and admin APIs
 - Full bitemporal history
 - Document retrieval, embeddings, and binary formats
+- Time-off balances, accruals, calendars, and regional absence policy
+- Scheduled jobs (the runtime owns scheduling)
 - Single sign-on federation
 
 ## Before the detailed spec
