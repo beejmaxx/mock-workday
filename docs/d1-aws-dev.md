@@ -62,8 +62,9 @@ These are the only code changes, and the local workflow must keep working unchan
 | `make aws-leftovers` | List anything billable or tagged `Project=mock-workday` that remains. Check load balancers, target groups, ECS services and tasks, RDS instances and snapshots, NAT gateways, Elastic IPs, unattached ENIs, EBS volumes, Secrets Manager secrets (including pending deletion), and log groups. Check `us-east-2`, plus CloudWatch Logs in `us-east-1`. Exit nonzero for Mock Workday-owned leftovers, unknown-owner cost-bearing resources or inventory errors; report other `lab=agent-runtime` owners with tags as information (M3 decision D53). |
 
 **Lab policy — hands-off operation:** interactive remains the default. After
-review approval, `aws.sh up --yes` / `down --yes`, or setting `MW_ALLOWED_CIDR`,
-selects Terraform `-input=false -auto-approve`. When configuration is needed,
+review approval, only `aws.sh up --yes` / `down --yes` selects Terraform
+`-input=false -auto-approve`. `MW_ALLOWED_CIDR` only supplies the CIDR and skips
+its prompt; it never enables auto-approval. When configuration is needed,
 use the freshly detected direct egress IPv4 `/32`; an environment CIDR must
 match it exactly, otherwise stop before Terraform. Down reuses existing tfvars.
 Wrong accounts, malformed IPs, unknown flags and interactive EOF fail closed.

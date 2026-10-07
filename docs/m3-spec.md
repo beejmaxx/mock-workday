@@ -1163,7 +1163,9 @@ printing potentially sensitive stderr text. Exhaustion is nonzero; preserve
 local inventory, private files and tfvars ARN until deletion succeeds.
 
 **[Lab policy]** Approved up/down operations can opt into prompt-free Terraform
-apply/destroy using `--yes` or `MW_ALLOWED_CIDR`. Interactive stays the default.
+apply/destroy using `--yes` only. `MW_ALLOWED_CIDR` supplies the CIDR and skips
+its prompt, but never enables Terraform auto-approval. Interactive approval stays
+the default, including when the environment variable is exported.
 The flag uses the detected direct egress IPv4 `/32`; a supplied environment CIDR
 must exactly match that detected value whenever configuration runs. Down reuses
 existing tfvars. This option consumes the existing deployment approval; it is
@@ -1317,7 +1319,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D51 — F: Null imported-certificate ARN stages provider NLB; owner enrollment supplies the ARN for TLS activation | Terraform-generated private keys in state; dummy deployable certificate | Preserves the approved custody boundary and makes the activation step reviewable without paid changes at checkpoint 3 |
 | D52 — C/H: Exact configured owner principal (IAM user or role in the provider account) for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account identities from bucket reads/inventory and secret access; validates an exact ARN without wildcards and does not modify the operator IAM identity |
 | D53 — E: Owner-scoped teardown verdict, with other owners and their tags reported separately (lab policy) | Fail on all account resources or delete unrelated resources to obtain a clean result | Concurrent S1 work and permanent platform infrastructure have independent owners/lifecycles; service existence plus own tags/names preserves cleanup accountability without disrupting them. Unknown-owner cost-bearing resources and inventory errors still fail, while stale tag entries and scheduled KMS deletion remain explicit information |
-| D54 — E/F: Explicit hands-off CLI mode and bounded owner ACM cleanup retries | Pipe prompt answers; require manual certificate cleanup retries | Opt-in flags retain interactive defaults/account and CIDR checks; bounded retries tolerate detach propagation while preserving credentials on failure and reporting AWS error codes |
+| D54 — E/F: Explicit hands-off CLI mode and bounded owner ACM cleanup retries | Pipe prompt answers; require manual certificate cleanup retries | Only explicit `--yes` enables auto-approval; a leftover exported CIDR cannot approve a destroy. Account and CIDR checks remain; bounded retries tolerate detach propagation while preserving credentials on failure and reporting AWS error codes |
 
 
 **[Lab policy]** Slice 2d implementation details and response shapes are now in

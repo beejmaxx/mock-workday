@@ -11,7 +11,6 @@ ACTION="${1:-}"
 # A nonempty array also works with nounset in macOS Bash 3.2.
 AUTO_APPROVE=(-input=true)
 NONINTERACTIVE=false
-if [[ "${MW_ALLOWED_CIDR+x}" == x ]]; then NONINTERACTIVE=true; fi
 if [[ "${2:-}" == --yes && $# == 2 ]]; then
   NONINTERACTIVE=true
 elif [[ $# -gt 1 ]]; then
@@ -33,7 +32,7 @@ configure() {
   mkdir -p "$ROOT/.local"
   local current_ip cidr tag
   current_ip="$(curl --noproxy "*" -fsS --max-time 10 https://checkip.amazonaws.com)"
-  if $NONINTERACTIVE; then
+  if $NONINTERACTIVE || [[ "${MW_ALLOWED_CIDR+x}" == x ]]; then
     cidr="${current_ip}/32"
     if [[ "${MW_ALLOWED_CIDR+x}" == x && "$MW_ALLOWED_CIDR" != "$cidr" ]]; then
       echo "MW_ALLOWED_CIDR must match detected direct egress $cidr; refusing." >&2

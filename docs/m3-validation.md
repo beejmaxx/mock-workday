@@ -293,8 +293,9 @@ Following the observed ACM detach race, TLS cleanup now makes at most six
 DeleteCertificate attempts with 2/4/8/16/30-second backoff, surfaces AWS error
 codes, and preserves private files/inventory/tfvars on failure. Already-absent
 certificates are safe to clean locally. Up/down support explicit hands-off mode
-via `--yes` or `MW_ALLOWED_CIDR`, with detected direct-egress `/32` validation and
-Terraform auto-approval; interactive remains the default. See decision D54.
+via `--yes`, with detected direct-egress `/32` validation and Terraform
+auto-approval. The follow-up tightening makes `MW_ALLOWED_CIDR` supply only the
+CIDR, skipping only its prompt; interactive Terraform approval remains the default. See decision D54.
 
 Validation was **local only; no AWS calls, Terraform operations or deployment**.
 `uv run --frozen pytest tests/test_aws_script.py tests/test_m3_infra.py
@@ -305,6 +306,12 @@ certificates, account/CIDR/flag/EOF refusal, and interactive/non-interactive
 up/down/plan. An initial test caught Bash 3.2's empty-array/nounset behavior;
 using explicit input-mode arguments fixed it. `bash -n`, Ruff and
 `git diff --check` passed. Live validation of these new paths was not performed.
+
+The approval follow-up separates CIDR selection from mutation approval: only
+`--yes` enables auto-approve. Environment-only CIDR input is tested for up, down
+and plan, including down with existing tfvars; flag-plus-environment mode is
+also covered. The same local test command now passes **52 tests**, with Ruff,
+Bash syntax and diff checks passing. No AWS calls were made for this tightening.
 
 Local evidence is in ignored `.local/m3-checkpoint4-*.log`, `m3-*-probes*.log`,
 `m3-deployment.json`, `m3-s3-seed-inventory.json`, `m3-kms-cloudtrail.json`,

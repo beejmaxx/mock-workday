@@ -173,14 +173,15 @@ After the deployment has been approved, hands-off commands are available:
 ```sh
 bash infra/scripts/aws.sh up --yes
 bash infra/scripts/aws.sh down --yes
-# Alternatively, explicitly supply the current detected direct egress /32:
+# Supply the current direct egress /32 without skipping Terraform approval:
 MW_ALLOWED_CIDR=203.0.113.7/32 make aws-up  # replace with your actual direct IP
 MW_ALLOWED_CIDR=203.0.113.7/32 make aws-down
 ```
 
-`--yes` or a set `MW_ALLOWED_CIDR` skips CIDR/Terraform prompts and enables
-`-input=false -auto-approve` for apply/destroy. Configuration always detects the
-direct egress IPv4 and uses its `/32`; a supplied CIDR must match exactly (empty,
+`--yes` alone enables `-input=false -auto-approve` for apply/destroy and skips
+the CIDR prompt. `MW_ALLOWED_CIDR` only supplies the CIDR and skips that prompt;
+Terraform approval prompts remain unless `--yes` is also passed. Configuration
+always detects the direct egress IPv4 and uses its `/32`; a supplied CIDR must match exactly (empty,
 stale or wider values are refused). Down reuses existing tfvars; it only detects
 an address when those inputs are missing. Account checks still run. Interactive
 mode remains the default, and these switches do not replace deployment review.

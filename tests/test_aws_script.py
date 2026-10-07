@@ -70,11 +70,13 @@ elif name == 'docker' and args[0] == 'login':
 
 
 @pytest.mark.parametrize("action", ["up", "down", "plan"])
-@pytest.mark.parametrize("mode", ["flag", "env", "interactive"])
+@pytest.mark.parametrize("mode", ["flag", "env", "flag_env", "interactive"])
 def test_T_D1_06_hands_off_approval(script, action, mode):
     root, run = script
-    args = ("--yes",) if mode == "flag" else ()
-    updates = {"MW_ALLOWED_CIDR": "203.0.113.7/32"} if mode == "env" else {}
+    args = ("--yes",) if mode in {"flag", "flag_env"} else ()
+    updates = (
+        {"MW_ALLOWED_CIDR": "203.0.113.7/32"} if mode in {"env", "flag_env"} else {}
+    )
     result, calls = run(
         action, *args, updates=updates, stdin="\n" if mode == "interactive" else ""
     )
@@ -91,10 +93,12 @@ def test_T_D1_06_hands_off_approval(script, action, mode):
         plans = [c for c in calls if c[0] == "terraform" and "plan" in c]
         assert len(plans) == 2
         assert all("-auto-approve" not in c for c in plans)
-        assert all(("-input=false" in c) == (mode != "interactive") for c in plans)
+        assert all(
+            ("-input=false" in c) == (mode in {"flag", "flag_env"}) for c in plans
+        )
     for call in mutations:
-        assert ("-auto-approve" in call) == (mode != "interactive")
-        assert ("-input=false" in call) == (mode != "interactive")
+        assert ("-auto-approve" in call) == (mode in {"flag", "flag_env"})
+        assert ("-input=false" in call) == (mode in {"flag", "flag_env"})
 
 
 @pytest.mark.parametrize(
@@ -121,3 +125,16 @@ def test_T_D1_06_interactive_eof_refuses(script):
     result, calls = run("up")
     assert result.returncode != 0
     assert not any(c[0] == "terraform" for c in calls)
+
+
+def test_T_D1_06_exported_cidr_does_not_approve_existing_destroy(script):
+    root, run = script
+    variables = root / ".local/aws-dev.tfvars.json"
+    variables.parent.mkdir()
+    variables.write_text('{"allowed_cidr":"203.0.113.7/32"}')
+    result, calls = run("down", updates={"MW_ALLOWED_CIDR": "203.0.113.7/32"})
+    assert result.returncode == 0, result.stderr
+    destroy = next(c for c in calls if c[0] == "terraform" and "destroy" in c)
+    assert "-auto-approve" not in destroy
+    assert "-input=true" in destroy
+    assert not any(c[0] == "curl" for c in calls)
