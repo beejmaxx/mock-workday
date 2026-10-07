@@ -85,7 +85,7 @@ resource "aws_s3_bucket_policy" "tenant" {
   for_each = local.tenants
   bucket   = aws_s3_bucket.tenant[each.key].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Sid = "RestrictedInventoryAndDeletion", Effect = "Deny", Principal = "*", Action = ["s3:ListBucket", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"], Resource = [aws_s3_bucket.tenant[each.key].arn, "${aws_s3_bucket.tenant[each.key].arn}/*"], Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.tenant_data.arn, var.operator_role_arn] } } },
+    { Sid = "RestrictedInventoryAndDeletion", Effect = "Deny", Principal = "*", Action = ["s3:ListBucket", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"], Resource = [aws_s3_bucket.tenant[each.key].arn, "${aws_s3_bucket.tenant[each.key].arn}/*"], Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.tenant_data.arn, var.operator_principal_arn] } } },
     { Sid = "TLSOnly", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.tenant[each.key].arn, "${aws_s3_bucket.tenant[each.key].arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } },
     { Sid = "ExactKey", Effect = "Deny", Principal = "*", Action = "s3:PutObject", Resource = "${aws_s3_bucket.tenant[each.key].arn}/*", Condition = { StringNotEquals = { "s3:x-amz-server-side-encryption-aws-kms-key-id" = aws_kms_key.tenant[each.key].arn } } },
     { Sid = "KMSOnly", Effect = "Deny", Principal = "*", Action = "s3:PutObject", Resource = "${aws_s3_bucket.tenant[each.key].arn}/*", Condition = { StringNotEquals = { "s3:x-amz-server-side-encryption" = "aws:kms" } } },
@@ -132,13 +132,13 @@ resource "aws_secretsmanager_secret_policy" "asu" {
   secret_arn          = aws_secretsmanager_secret.asu[each.key].arn
   block_public_policy = true
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Deny", Principal = "*", Action = "secretsmanager:GetSecretValue", Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.tenant_data.arn, var.operator_role_arn] } } },
+    { Effect = "Deny", Principal = "*", Action = "secretsmanager:GetSecretValue", Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.tenant_data.arn, var.operator_principal_arn] } } },
     { Effect = "Deny", Principal = "*", Action = "secretsmanager:GetSecretValue", Resource = "*", Condition = { ArnEquals = { "aws:PrincipalArn" = aws_iam_role.tenant_data.arn }, StringNotEquals = { "aws:PrincipalTag/tenant" = each.value.tenant } } },
-    { Effect = "Deny", Principal = "*", Action = ["secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:UpdateSecretVersionStage"], Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_role_arn } } }
+    { Effect = "Deny", Principal = "*", Action = ["secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:UpdateSecretVersionStage"], Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_principal_arn } } }
   ] })
 }
 resource "aws_secretsmanager_secret_policy" "tls" {
   secret_arn          = aws_secretsmanager_secret.tls.arn
   block_public_policy = true
-  policy              = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Deny", Principal = "*", Action = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:UpdateSecretVersionStage"], Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_role_arn } } }] })
+  policy              = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Deny", Principal = "*", Action = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:UpdateSecretVersionStage"], Resource = "*", Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_principal_arn } } }] })
 }

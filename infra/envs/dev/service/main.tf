@@ -1,3 +1,14 @@
+variable "operator_principal_arn" {
+  type        = string
+  nullable    = false
+  default     = "arn:aws:iam::729608197929:user/lab-operator-cli"
+  description = "Exact operator IAM user or role ARN in the dev account."
+  validation {
+    condition     = can(regex("^arn:aws:iam::729608197929:(user|role)/[A-Za-z0-9_+=,.@-]+(/[A-Za-z0-9_+=,.@-]+)*$", var.operator_principal_arn))
+    error_message = "Operator must be an exact IAM user or role ARN in account 729608197929, without wildcards."
+  }
+}
+
 variable "allowed_cidr" {
 
   type = string
@@ -29,7 +40,7 @@ data "aws_ssm_parameter" "network" {
 module "service" {
 
   source                      = "../../../modules/service"
-  operator_role_arn           = "arn:aws:iam::729608197929:role/managed/AccountFullAccessRole"
+  operator_principal_arn      = var.operator_principal_arn
   public_domain               = var.public_domain
   allowed_principal           = var.allowed_principal
   consumer_vpc_id             = var.consumer_vpc_id

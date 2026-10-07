@@ -32,7 +32,7 @@ resource "aws_sqs_queue" "dlq" {
 resource "aws_sqs_queue_policy" "dlq" {
   for_each  = local.subscriptions
   queue_url = aws_sqs_queue.dlq[each.key].url
-  policy    = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "events.amazonaws.com" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.dlq[each.key].arn, Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.consumer[each.key].arn }, StringEquals = { "aws:SourceAccount" = var.account_id } } }, { Sid = "OwnerOnlyDrain", Effect = "Deny", Principal = "*", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:PurgeQueue"], Resource = aws_sqs_queue.dlq[each.key].arn, Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_role_arn } } }] })
+  policy    = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "events.amazonaws.com" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.dlq[each.key].arn, Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.consumer[each.key].arn }, StringEquals = { "aws:SourceAccount" = var.account_id } } }, { Sid = "OwnerOnlyDrain", Effect = "Deny", Principal = "*", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:PurgeQueue"], Resource = aws_sqs_queue.dlq[each.key].arn, Condition = { ArnNotEquals = { "aws:PrincipalArn" = var.operator_principal_arn } } }] })
 }
 resource "aws_cloudwatch_event_target" "consumer" {
   for_each       = local.subscriptions
@@ -60,5 +60,5 @@ resource "aws_iam_role_policy" "application" {
 }
 resource "aws_cloudwatch_event_bus_policy" "producer" {
   event_bus_name = aws_cloudwatch_event_bus.main.name
-  policy         = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "OnlyProviderProducers", Effect = "Deny", Principal = "*", Action = "events:PutEvents", Resource = aws_cloudwatch_event_bus.main.arn, Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.task.arn, var.operator_role_arn] } } }] })
+  policy         = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "OnlyProviderProducers", Effect = "Deny", Principal = "*", Action = "events:PutEvents", Resource = aws_cloudwatch_event_bus.main.arn, Condition = { ArnNotEquals = { "aws:PrincipalArn" = [aws_iam_role.task.arn, var.operator_principal_arn] } } }] })
 }

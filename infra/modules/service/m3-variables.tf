@@ -1,5 +1,11 @@
-variable "operator_role_arn" {
-  type = string
+variable "operator_principal_arn" {
+  type        = string
+  nullable    = false
+  description = "Exact operator IAM user or role ARN in the provider account."
+  validation {
+    condition     = can(regex("^arn:aws:iam::${var.account_id}:(user|role)/[A-Za-z0-9_+=,.@-]+(/[A-Za-z0-9_+=,.@-]+)*$", var.operator_principal_arn))
+    error_message = "Operator must be an exact IAM user or role ARN in the provider account, without wildcards."
+  }
 }
 variable "public_domain" {
   type    = string

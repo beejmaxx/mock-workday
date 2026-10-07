@@ -589,8 +589,8 @@ without HA. Allow only that consumer's approved AWS principal to request a
 connection using an explicit account-root ARN (`arn:aws:iam::<account>:root`);
 accept only the approved endpoint ID. AWS endpoint-service permissions reject
 IAM role path components, as verified by the runtime team; do not pass a
-`role/managed/...` ARN here. Account permission never bypasses acceptance. Neither PrivateLink nor an
-IP address is tenant authentication: normal Host/JWT authorization still runs.
+path-bearing role ARN here. Account permission never bypasses acceptance. Neither
+PrivateLink nor an IP address is tenant authentication: normal Host/JWT authorization still runs.
 No wildcard allowed principals. If NLB inbound evaluation for PrivateLink is
 disabled, keep direct NLB ingress closed and rely on approved endpoint
 connections plus consumer endpoint SGs; record that choice in the plan.
@@ -1275,7 +1275,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D49 — M: Fixed dev environment and specified dimensions; fake uses the same local metric shape | Caller-selected dimensions; tenant dimensions on every request metric | Matches the single disposable lab deployment, bounds custom-metric cardinality, and tests EMF without creating paid metrics |
 | D50 — D/F: Account-root PrivateLink permission plus explicit endpoint acceptance; null consumer inputs skip consumer-dependent resources | Path-bearing role principal; broad automatic acceptance; fabricated consumer IDs | Avoids the observed InvalidPrincipal failure, keeps access bounded to approved endpoint IDs and lets each domain deliver its own infrastructure independently |
 | D51 — F: Null imported-certificate ARN stages provider NLB; owner enrollment supplies the ARN for TLS activation | Terraform-generated private keys in state; dummy deployable certificate | Preserves the approved custody boundary and makes the activation step reviewable without paid changes at checkpoint 3 |
-| D52 — C/H: Exact existing owner role for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account roles from bucket reads/inventory and secret access; does not modify the platform owner role |
+| D52 — C/H: Exact configured owner principal (IAM user or role in the provider account) for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account identities from bucket reads/inventory and secret access; validates an exact ARN without wildcards and does not modify the operator IAM identity |
 
 
 **[Lab policy]** Slice 2d implementation details and response shapes are now in

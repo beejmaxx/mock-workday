@@ -61,6 +61,21 @@ Validated with Terraform 1.16.4 and the locked AWS 6.67.0 provider (random 3.9.1
 | Provider-only service, all optional inputs null | **114** | **0** | **0** |
 | Synthetic conditional review (TLS, consumer and public domain branches) | 143 | 0 | 0 |
 
+The operator-principal correction was replanned against the same provider inputs:
+**114 add, 0 change, 0 destroy**, with the same resource addresses and actions.
+Comparing saved plan JSON after substituting the old operator ARN with the verified
+IAM user ARN yields identical managed-resource changes. Only the TLS secret policy
+has a fully known changed value at plan time; the other affected policies contain
+resource ARNs that remain unknown until apply. Their source changes only rename
+the operator reference. No resource, consumer input, or cost assumption changed.
+The correction passed recursive fmt, both module-root validations, shell syntax,
+and `uv run --frozen pytest -o addopts='' -q`: **233 passed**, including the four
+bulk tests (one dependency deprecation warning). Seven isolated Terraform plan
+checks of the module's validation accepted the user and a path-bearing role and
+rejected `*`, `?`, another account, account-root and an STS session ARN. Those
+checks used only the extracted variable definitions, without AWS providers or
+resources. No apply, destroy, secret write or push was run.
+
 The provider count is **112 AWS resources + 2 random_password resources**.
 Private TLS activation adds one listener (115 total on a fresh full-provider plan)
 and changes the existing task target attachment. With one fully specified consumer
@@ -114,9 +129,15 @@ tenant's Secrets Manager encryption context. The base app role has no direct
 S3/secret/decrypt permission. The bootstrap role may assume tagged storage sessions,
 but does not publish events or invoke models. The provider bus denies unrelated
 producers. ASU secret writes and TLS secret access are owner-only. Queue draining
-is owner-only. The existing operator role ARN was read from IAM, including its
-`managed/` path; that path is valid in these policies, unlike PrivateLink principal
-permissions. No platform IAM role was modified.
+is owner-only. `operator_principal_arn` defaults to
+`arn:aws:iam::729608197929:user/lab-operator-cli`, verified with
+`AWS_PROFILE=agent-runtime aws sts get-caller-identity`. Both the dev input and
+module validate an exact IAM user or role ARN in the provider account; wildcards,
+STS session ARNs, account-root and other-account principals are rejected. This
+operator input is separate from PrivateLink's account-root-only permission.
+`tls.py`, `prepare_down.py`, `m3_leftovers.py`, and `aws.sh` use the CLI profile
+without assuming a role-shaped caller ARN; the shell account check compares only
+the account ID. No platform IAM identity was modified.
 
 WAF is public-ALB-only: CommonRuleSet, KnownBadInputsRuleSet, and 2,000/IP/300s.
 Only SizeRestrictions_BODY is counted instead of blocked. Sampled requests and
