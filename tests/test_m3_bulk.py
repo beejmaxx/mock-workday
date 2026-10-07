@@ -204,3 +204,74 @@ def test_T_M3_SEED_02_s3_partial_upload_resume(env, monkeypatch):
         assert one(conn, "SELECT complete FROM seed_loads WHERE tenant_id=:tid")[
             "complete"
         ]
+
+
+def test_T_M3_SEED_01_realistic_architecture_and_documents():
+    import hashlib
+    import random
+    from collections import Counter
+
+    from mock_workday.bulk_data import FAMILIES, FIRST, INDUSTRIES, LAST, architecture
+    from mock_workday.bulk_seed import records
+
+    assert len(FIRST) == len(set(FIRST)) == 200
+    assert len(LAST) == len(set(LAST)) == 200
+    for slug, sizes in TENANTS.items():
+        rng = random.Random(
+            int.from_bytes(hashlib.sha256(f"20261008:{slug}".encode()).digest(), "big")
+        )
+        names, orgs, positions, history, salaries = architecture(slug, *sizes, rng)
+        assert len(names) == len(set(names)) == sizes[0]
+        assert all(not any(c.isdigit() for c in name) for name in names)
+        assert {o["name"] for o in orgs} >= set(FAMILIES)
+        assert 3 <= max(o["depth"] for o in orgs) <= 4
+        ics = [p for p in positions[: sizes[0]] if not p["manager"]]
+        levels = Counter(p["level"] for p in ics)
+        assert (levels[0] + levels[1]) / len(ics) > 0.5
+        assert (levels[3] + levels[4]) / len(ics) < 0.2
+        assert sum(p["manager"] for p in positions[: sizes[0]]) / sizes[0] < 0.1
+        promotions = 0
+        for i, revisions in enumerate(history):
+            assert len({positions[p]["family"] for p in revisions}) == 1
+            assert salaries[i][0] < salaries[i][1] < salaries[i][2]
+            assert 45000 <= salaries[i][0] <= salaries[i][-1] <= 280000
+            if revisions[0] != revisions[2]:
+                promotions += 1
+                assert (
+                    positions[revisions[0]]["level"] + 1
+                    == positions[revisions[2]]["level"]
+                )
+                assert salaries[i][2] >= salaries[i][1] * 1.09
+        assert promotions > sizes[0] * 0.04
+        for n, p in enumerate(positions[: sizes[0]]):
+            if p["manager"] and n:
+                assert p["org"] == orgs[n]["parent"]
+                assert orgs[n]["name"] in p["title"]
+                assert p["title"].startswith(
+                    "VP"
+                    if orgs[n]["depth"] == 1
+                    else "Director"
+                    if orgs[n]["depth"] == 2
+                    else ("Manager", "Senior Manager")
+                )
+        samples = [r["content"] for table, r in records(slug) if table == "documents"][
+            :80
+        ]
+        assert len(set(samples)) == 80
+        assert all(
+            any(location in doc for location in INDUSTRIES[slug]["locations"])
+            for doc in samples
+        )
+        # Shared vocabulary is fine; repeated filler paragraphs are not the bulk of a document.
+        assert (
+            len(
+                {
+                    paragraph
+                    for doc in samples
+                    for paragraph in doc.split("\n")
+                    if len(paragraph) > 100
+                }
+            )
+            > 500
+        )
+        assert "Untrusted fixture:" in samples[0] and "Control:" in samples[1]

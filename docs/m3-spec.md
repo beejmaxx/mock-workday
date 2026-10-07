@@ -482,8 +482,8 @@ benefits/security/leave policies. Targets/classification follow spec §7. Body
 sizes cycle deterministically from 4 to 16 KiB (about 10 KiB average): roughly
 140 MiB of document bodies. Budget under 0.5 GiB DB storage including indexes
 and metadata in AWS, under 0.7 GiB locally with text bodies. These are design
-estimates. Slice 2a measured 146,761,728 body bytes and 48,811,155 local DB bytes
-(including small fixtures/indexes); repeated synthetic text compresses heavily.
+estimates. The realistic bulk-v1 revision measured 146,761,728 body bytes and
+72,584,339 local DB bytes, retaining exact body byte targets.
 Cloud sizing/timings remain checkpoint-4 evidence.
 No binary parsing, embeddings, or bulk report objects are precomputed.
 
@@ -1247,6 +1247,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D38 — E: Disposable stack, 7-day pending key inventory, persistent platform exceptions | Keep resources overnight; delete shared foundation for a clean check | Meets cost/ownership constraints while reporting unavoidable KMS and metric-history leftovers truthfully |
 | D39 — Scope: No CloudFront/X-Ray/Macie/CloudHSM, multi-AZ RDS, autoscaling, SNS or internal queues beyond target DLQs | Add production infrastructure wholesale | Each excluded service either lacks a current need, violates the plan/stack constraints, or is unavailable; production resemblance does not justify unused machinery |
 | D40 — Integration: Versioned HTTP plus explicit event/export exceptions, no shared DB/code | Import runtime internals or share persistence | Keeps independent ownership and testable contracts despite broader enterprise-service functionality |
+| D41 — K: 200-by-200 synthetic name pools, family/level architecture and industry-specific prose before first bulk load | Numeric name suffixes, unrelated role rotation and repeated filler | Makes core-service examples believable without new schema fields, real personal data or a compensation engine; preserve counts/IDs and recompute content hashes |
 
 ## 11. Reviewer decisions and remaining deployment inputs
 

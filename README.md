@@ -246,9 +246,9 @@ after local startup to add Northstar, Meridian and Cedar. `make test-bulk`
 loads and verifies all three in throwaway PostgreSQL, with no Docker/AWS calls.
 The three tenants add 3,584 workers, 299 orgs, 4,200 positions, 10,752 business
 processes and 14,336 documents. The full PostgreSQL test measured **146,761,728
-bytes (139.96 MiB)** of document text and **48,811,155 bytes (46.55 MiB)** for
-the local database including small fixtures/indexes. Repetitive synthetic text
-compresses heavily in PostgreSQL; this is not a production sizing estimate.
+bytes (139.96 MiB)** of document text and **72,584,339 bytes (69.22 MiB)** for the local database with the richer
+templates. PostgreSQL compresses this synthetic prose; this is not production
+sizing evidence.
 Bulk usernames are `worker-00001`, etc.; each
 tenant shares synthetic password `pw-bulk-<slug>` and one computed password
 hash. Never use these credentials for real data.

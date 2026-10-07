@@ -927,11 +927,28 @@ Each worker has three job/compensation revisions (2024/2025/2026 January 1),
 two time-off events, one completed Change Job and four 4–16 KiB documents.
 Supervisory trees have 4–5 levels, parent-org managers, constrained HR/comp
 roles, unfilled leadership positions and vacant positions for live changes.
-Historical positions rotate without overlapping occupants at an effective date.
+Promotions use dedicated lower-level historical positions in the same family;
+other workers keep their position across merit reviews. Occupancy never overlaps.
 Completed job events link to 2026 revisions; seed approvals are imported
 fixtures, not live business transactions. Two balance snapshots (2026-01-01 and
 seed day) agree with completed seeded absence days at eight hours/day. Live
 absence approval still does not alter these snapshots.
+
+The reviewer-approved bulk-v1 revision (before any deployed bulk load) uses
+200 synthetic first and 200 last names, with deterministic middle initials for
+collisions and no numeric suffixes. Ten job families occupy their own subtrees:
+Engineering, Product, Sales, Marketing, Customer Support, Finance, People, Legal,
+IT and Operations. Northstar is software, Meridian healthcare and Cedar retail;
+each has industry-specific departments, projects and named office locations.
+A roughly 8% management layer follows org depth (VP, Director, Senior Manager,
+Manager). IC level weights are 25/38/25/9/3 for Associate/II/Senior/Staff/Principal.
+Synthetic family/level salary bands give Engineering and Legal higher base pay
+than Support/Operations; historical merit increases and promotions match position
+history. Offers show the same three-year pay figures as compensation revisions.
+Document sections vary by type, project, office, review findings and action;
+exact byte targets, IDs/counts and the manifest hash mechanism remain unchanged.
+Content hashes necessarily change with the richer content. No deployed seed
+migration or version bump is needed because bulk-v1 has not been deployed.
 
 Documents include offers, performance/onboarding notes, acknowledgements,
 handbooks, policies and org plans. At least 1% are inert injection fixtures,
