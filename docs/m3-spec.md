@@ -1,9 +1,8 @@
 # MW-M3: Workday core integration — checkpoint 1 draft
 
-**Status: proposed, not approved. Date: 2026-10-08. Spec only.** This document
-does not change the implemented contract in [spec.md](spec.md). Decisions at the
-end require review before checkpoint 2. No application code, infrastructure,
-deployment, or runtime-repository change is authorized by this draft.
+**Status: approved with reviewer decisions, 2026-10-08.** Checkpoint 1 is
+complete. Implement the approved contract in the independently reviewed slices
+below; fold each slice into [spec.md](spec.md) with its code and tests. No push.
 
 ## 0. Scope, labels, and checkpoints
 
@@ -28,10 +27,15 @@ credential store, or direct access to Mock Workday storage is an integration API
 
 **[Lab policy]** Checkpoints from [AGENTS.md](../AGENTS.md):
 
-1. Commit this spec draft and stop; do not push.
-2. After spec approval, implement code and tests. Incorporate approved changes
-   into `docs/spec.md`, its §11 test matrix, and generated OpenAPI in the same
-   implementation commit. Commit and stop.
+1. Spec reviewed; commit the reviewer amendments before starting 2a.
+2. Implement code/tests in four slices, **each committed and stopped for review**:
+   - **2a:** S3/KMS/ABAC storage and local branch, bulk seed generator, balances.
+   - **2b:** registration, ASUs, JWT-bearer/OBO, credential store, audit and logs.
+   - **2c:** report exports and business events with transactional outbox.
+   - **2d:** native AI, fake model, usage ledger and EMF.
+   Fold each approved slice into `docs/spec.md`, §11 and generated OpenAPI in
+   its implementation commit. Later-slice records in the bulk seed are deferred
+   until that slice; 2a does not create ASUs or publish business notifications.
 3. Implement approved Terraform/scripts, run `fmt`, `validate`, `plan`; commit
    and stop with the plan. No apply or image push at these earlier checkpoints.
 4. Only after plan approval: apply, smoke-test, record evidence, then
@@ -52,7 +56,8 @@ SNS, internal work queues, Object Lock, Athena, Kinesis, Firehose, AWS Private C
 CloudFront (authenticated dynamic API/caching risk), X-Ray (instrumentation
 excluded), Macie and CloudHSM (unavailable on this plan), and new runtime
 infrastructure. WAF is now in scope on the public ALB only, superseding its
-earlier exclusion. The sole queue exception is a provider-side SQS
+earlier exclusion. The transactional publication outbox (§6.2) is not an internal work queue.
+The sole queue exception is a provider-side SQS
 dead-letter queue for each cross-domain EventBridge target (§6).
 
 ## 1. Evidence and limits (A, B, H)
@@ -168,23 +173,27 @@ agent-specific grant API.
 
 **[Workday-inspired]** New ASU delegate exchange combines authenticated agent
 identity with human authority and returns an attenuated token. Its concrete
-form is a lab profile of [RFC 8693][rfc8693]:
+form reuses the existing token-exchange grant-type identifier; grant-based
+renewal is a lab extension, not a claim of full [RFC 8693][rfc8693] compliance:
 
 | Form field | Proposed meaning |
 |---|---|
 | `grant_type` | Existing `urn:ietf:params:oauth:grant-type:token-exchange` |
 | `client_id`, `client_secret`, `credential_version_id` | Delegate ASU authentication, active version required |
-| `subject_token`, `subject_token_type` | Current direct-human Mock Workday access token; type `urn:ietf:params:oauth:token-type:access_token` |
-| `grant_id` | Existing consent record; must belong to that human and this client |
+| `grant_id` | Existing consent record; identifies the consenting human and must belong to this tenant/client |
 | `scope` | Optional requested narrowing; cannot expand the grant or client ceiling |
 
-**[Lab policy]** Reject delegated/ISU/ambient subject tokens, another tenant or
-user's grant, absent/revoked/expired consent, or ambient-client exchange. No
-chained delegation. Output keeps `typ=delegated`, `sub=human`, `gid`, and
-`act.client_id`; add `act.sub=delegate ASU`, agent/ASU/credential version, and
-operation ceiling. TTL is the minimum of 300 seconds and remaining human token,
-grant, and credential lifetimes. A new ASU exchange requires a fresh valid human
-token; the runtime team must review this renewal implication before adoption.
+**[Lab policy]** The human proves presence once when creating the grant.
+Renewal requires delegate ASU client authentication, an active credential version
+and the active grant; it requires no fresh human subject token. Reject another
+tenant/client's grant, expired/revoked consent, disabled human, or ambient-client
+exchange. No chained delegation. Output keeps `typ=delegated`, `sub=human`,
+`gid`, and `act.client_id`; add `act.sub=delegate ASU`, agent/ASU/credential
+version and operation ceiling. TTL is the minimum of 300 seconds and remaining
+grant and credential lifetimes. Every call still checks the human's current
+authority. The grant is the lab analogue of a refresh token, with one revocation
+record; Workday's documented authorization-code access/refresh flow supports
+renewal without human presence [External ASU considerations][wd-external-asu].
 
 **[Lab policy]** Existing unbound `assistant`/`hr-assistant` grant-ID-plus-secret
 exchange, ordinary ISUs, synthetic credentials, and issued token meanings stay
@@ -439,7 +448,10 @@ compensation revisions, effective 2024-01-01, 2025-01-01 and 2026-01-01. Allocat
 historical positions without overlapping occupants and reserve vacant positions
 for live Change Job tests. Salary bands follow synthetic role/seniority ranges
 (USD 45,000–280,000), with positive, internally consistent progression. Every
-worker has a synthetic human account using the existing password convention.
+worker has a synthetic human account. Bulk accounts share the documented
+synthetic password `pw-bulk-{slug}`; compute one password hash per tenant and
+reuse it for that tenant's accounts, avoiding 3,584 expensive KDF calls. Original
+small-fixture passwords and hashes retain their existing behavior.
 Add one registration/two ASUs per tenant; ambient defaults to staffing reads,
 delegate to limited staffing/absence/documents operations; AI and export use
 require explicit entitlements. Seed no usable long-lived ASU secret.
@@ -583,7 +595,7 @@ state access. The runtime repository is read-only for this checkpoint and does
 not receive automated edits or resources from Mock Workday.
 
 **[Lab policy]** Mock Workday owns one Route 53 private hosted zone,
-`mockworkday.local`. Exact records for `acme`, `globex`, `northstar`,
+`mockworkday.internal`. Exact records for `acme`, `globex`, `northstar`,
 `meridian`, and `cedar` under that suffix resolve to the consumer interface endpoint
 DNS target, with TTL 60 seconds for CNAME records. Associate the zone with the
 approved consumer VPC; cross-account association requires actions by both
@@ -720,29 +732,32 @@ BP version to recognize stale notifications. Version gaps are valid because
 not every transition emits a notification. Re-fetch through HTTP with current
 authority instead of inferring current state from arrival order.
 
-### 6.2 Publication boundary — decision required
+### 6.2 Transactional outbox and publication
 
-**[Lab policy] Proposed minimum under the no-internal-queues constraint:** after
-the DB commits, synchronously call `PutEvents` and inspect each entry's result,
-not just HTTP status. Retry transient/unknown outcomes up to three attempts
-within a five-second total budget, keeping the stable event ID. Failure is
-logged with that ID; it does not roll back or falsely report failure of an
-already-committed business operation. Existing business success/idempotency
-responses stay intact. No publish before commit and no publish after rollback.
+**[Lab policy]** Insert an `event_outbox` row in the same database transaction
+as the BP transition/history, mutation, audit and idempotency receipt. The row
+contains tenant, stable event ID, schema version, immutable event detail,
+created time, attempt count, next-attempt time and nullable published time.
+Tenant predicates and FORCE RLS apply; grant the application insert/select and
+updates only to delivery bookkeeping. A rollback leaves no publishable event.
 
-**[Lab policy]** This has a real commit-to-publish crash gap. A provider target
-DLQ cannot capture an event never accepted by EventBridge. Provide an
-operator-only history-range republication command (bounded tenant and BP
-history IDs, audit recorded), not a background queue/dispatcher. An idempotent
-HTTP retry may also republish that committed transition without redoing the
-business mutation. Consumers must be duplicate-safe.
+**[Lab policy]** One small dispatcher loop in the same service image scans
+committed due rows by tenant in bounded batches (at most 10). Use row locking
+with `SKIP LOCKED` while publishing/marking a batch to avoid overlapping dispatch.
+Inspect every `PutEvents` entry result. Mark only accepted entries published;
+retry failed or unknown outcomes with exponential backoff capped at 60 seconds.
+SDK timeouts bound each attempt. A crash after acceptance but before marking
+causes republication with the same stable event ID: delivery is at least once,
+with duplicates and no global ordering guarantee. Persist failures/retry state
+and expose overdue unpublished rows in structured logs/alarms. No separate
+queue, worker framework or dispatcher deployment is introduced.
 
-**[Lab policy]** **At-least-once applies to accepted-event delivery/retries,
-not an unconditional guarantee that every DB commit reaches the consumer.**
-Even accepted events can exhaust retries and require DLQ recovery. If the user
-requires automatic eventual publication for every commit, approve a durable
-transactional outbox and dispatcher as a specific scope change; this draft
-does not smuggle one in under a different name. Resolve this before G is coded.
+**[Lab policy]** This closes the DB/event dual-write loss gap. Eventual publication
+still depends on restoring failed infrastructure and keeping the outbox until
+accepted; target retry exhaustion remains recoverable through the target DLQ.
+Keep a bounded, audited operator history-range republish command as a repair
+tool, preserving stable IDs. It is not the normal delivery mechanism. Published
+outbox rows can be pruned after 7 days; never prune unpublished rows by age.
 
 ### 6.3 Cross-domain target and DLQ ownership
 
@@ -1000,7 +1015,7 @@ event detail JSON Schema v1 is a separate published artifact alongside it.
 |---|---|
 | §1–2 | ASU account kind, tenant identity tables/RLS, secret references, document object metadata, export records, BP history transition fields |
 | §3–4 | New token forms, compatibility rules, current credential validation, fixed operation ceilings |
-| §5–6 | Audit actor vs effective human, post-commit publication semantics, report endpoint; preserve BP receipts/locking |
+| §5–6 | Audit actor vs effective human, transactional outbox publication semantics, report endpoint; preserve BP receipts/locking |
 | §7–8 | S3 bodies, report capability exception, actor attribution and structured logs |
 | §9–11 | Admin lifecycle, deterministic bulk generator and balances, native AI fake/usage ledger, M3 test IDs |
 | §12–13/D1 | ABAC sessions, EMF, WAF, private/optional public TLS, Bedrock processing regions, costs and integration boundary exceptions |
@@ -1146,7 +1161,7 @@ at checkpoint 4; checkpoint 3 is fmt/validate/plan only.
 | T-M3-ID-01 | Tenant registration uniqueness; maximum one ASU per mode/two total; one client each; disabled default; RLS and privileges |
 | T-M3-ID-02 | Ambient JWT success, exact issuer/subject/audience; certificate pin/validity; wrong tenant/client/mode/algorithm/key fails |
 | T-M3-ID-03 | Assertion expiry/future time/60-second limit, concurrent JTI replay, token TTL caps |
-| T-M3-ID-04 | OBO direct-human subject plus existing grant; wrong owner/client, expired/revoked grant, chained subject and missing token rejected |
+| T-M3-ID-04 | OBO renewal without human token; client/credential/grant required; wrong tenant/client, expired/revoked grant and disabled human rejected; current human authority rechecked |
 | T-M3-ID-05 | Current scope and operation intersection; human action allowed but delegate denied; ambient domain reach and BP denial |
 | T-M3-ID-06 | Legacy token/grant compatibility; no ASU fallback to legacy exchange or ISU credentials |
 | T-M3-CR-01 | Two-version overlap boundary, rotation failure, duplicate-key rejection, emergency revocation and old-token rejection |
@@ -1162,7 +1177,7 @@ at checkpoint 4; checkpoint 3 is fmt/validate/plan only.
 | T-M3-N-01 | Private exact tenant DNS, CA trust/hostname checks, unknown host/cross-tenant token, rejected unapproved endpoint |
 | T-M3-N-02 | D1 operator smoke unchanged; admin/DB unreachable via both LBs; no runtime S3/secret access except report bearer URL |
 | T-M3-E-01 | Commit-only types/schema/tenant/actor/version; final vs intermediate approval; no sensitive content or authority |
-| T-M3-E-02 | Per-entry PutEvents failures, retry/timeout duplicate ID, post-commit crash and explicit history replay; rollback emits nothing |
+| T-M3-E-02 | Per-entry PutEvents failures, retry/timeout duplicate ID, atomic outbox/history rollback, restart recovery, crash after acceptance before mark, backoff and bounded repair; rollback emits nothing |
 | T-M3-E-03 | Cross-domain tenant filtering, no credentials in events; duplicates/out-of-order fixtures and authorized HTTP refetch |
 | T-M3-E-04 | One DLQ per target, policy/KMS correctness; permanent target failure retained, alarms visible, controlled redrive preserves detail ID |
 | T-M3-ABAC-01 | Missing/wrong tag, prefix, bucket, secret and key rejected; TagSession trust; correct tenant session succeeds; base task role cannot bypass |
@@ -1181,16 +1196,16 @@ at checkpoint 4; checkpoint 3 is fmt/validate/plan only.
 
 ## 10. Decision register: choices, alternatives, and reasoning
 
-**[Lab policy]** Every row is a proposed lab decision unless it explicitly says
+**[Lab policy]** Every row is an approved lab decision unless it explicitly says
 Workday-inspired. It is not evidence of Workday's internal design. Unknown
 implementation details are handled by these stated assumptions, not a research
-blocker. The existing contract remains unchanged until checkpoint 2 approval.
+blocker. The implemented contract changes slice by slice at checkpoint 2.
 
 | Decision | Alternative considered | Why (reasoning to defend) |
 |---|---|---|
 | D01 — A: Tenant registration with at most one ASU per mode; Workday-inspired | One global identity or one account shared across modes | Tenant boundaries and separate autonomous/delegated authority stay explicit; matches the published identity distinction without modeling a runtime |
 | D02 — A: Reuse grants as the sole consent record | Add a second agent-consent/refresh database | One revocation source avoids inconsistent authority and preserves the existing integration |
-| D03 — A: New OBO requires direct-human subject token plus grant; keep old clients unchanged | Grant-only renewal for all callers; replace legacy clients in place | Explicit human evidence and a controlled compatibility path; renewal burden is visible for review |
+| D03 — A: Delegate ASU client + active credential + grant-based renewal, no fresh human token | Require human presence on every exchange | Workday documents consent with access and refresh tokens; the grant is our refresh-token analogue, one revocation record, with current human authority checked per call; legacy clients stay compatible |
 | D04 — A: JWT-bearer ambient auth with pinned registered X.509 key | Shared ambient secret or accepting arbitrary certificate subjects | Proof of key possession maps to a server-owned tenant/client binding; key text never selects authority |
 | D05 — A: Fixed scopes plus a fixed operation ceiling | Full Workday skill catalogue/policy DSL; scopes alone | Prevents coarse-scope privilege amplification with a short direct check |
 | D06 — A: Revalidate authority/credential status per call; 300s access tokens, 60s assertions | Rely on token expiry or long authorization caches | Prompt revocation and understandable bounded credential exposure; in-flight actions remain a documented limit |
@@ -1203,15 +1218,15 @@ blocker. The existing contract remains unchanged until checkpoint 2 approval.
 | D13 — C/L: Tenant-tagged STS role with prefix/key restrictions and 900s cached sessions | Broad app S3/KMS permissions; IAM role per tenant | Adds a cloud-side check below DB isolation without a role explosion or per-request STS call; trusted app remains the tag issuer |
 | D14 — C: S3 immutable bodies, DB metadata/authorization; write object before DB commit | Store everything in S3; distributed transaction | Ordinary relational security stays intact; bounded orphan cleanup is simpler than pretending atomic cross-service commits |
 | D15 — C/E: Crypto-shredding plus explicit row/object deletion | Promise immediate total erasure on key disable | Distinguishes key caches, reversible disabling, delayed final deletion, RDS data and already-disclosed copies honestly |
-| D16 — K: Three bulk tenants with fixed-seed/versioned generator; original fixtures unchanged | Enlarge Acme/Globex and rewrite the regression matrix | Realistic scale without destabilizing carefully defined access examples; manifest hashes detect generator drift |
+| D16 — K: Three bulk tenants with fixed-seed/versioned generator; original fixtures unchanged | Enlarge Acme/Globex and rewrite the regression matrix | Realistic scale without destabilizing carefully defined access examples; manifest hashes detect generator drift; one shared synthetic password hash per bulk tenant avoids thousands of KDF calls |
 | D17 — K: Consistent historical records and read-only balance snapshots | Full accrual/payroll/absence accounting engine | Supplies useful context while keeping the existing two-process learning scope and no-live-balance rule explicit |
 | D18 — K: Resumable bounded bootstrap import, no seed-time notifications | Regenerate live data on each app start; unbounded parallel import | Protects modified test data and keeps small Fargate memory/RDS capacity usable |
 | D19 — I: Bounded synchronous NDJSON report | Async job/queue, arbitrary reporting DSL, all rows in memory | Fits the simple stack and thousands-of-workers lab while making report authorization inspectable |
 | D20 — I: 60s presigned report capability, API-only ordinary documents | Proxy every export; long-lived download URLs | Exercises common SaaS export behavior and reduces API transfer work; bearer/revocation tradeoff is explicit |
 | D21 — D: Provider PrivateLink/NLB; consumer endpoint owned by runtime | Public-only integration, broad peering routes, a new shared VPC | Exposes one private service without coupling databases or network routing domains |
-| D22 — F: Exact private tenant DNS and offline lab CA; TLS ends at NLB | Private CA monthly fee; disabling TLS verification; backend TLS now | Tests trust and hostname identity cheaply; internal HTTP hop remains an explicit lab simplification |
+| D22 — F: Exact private tenant DNS under mockworkday.internal and offline lab CA; TLS ends at NLB | Private CA monthly fee; disabling TLS verification; backend TLS now | Tests trust and hostname identity cheaply; internal HTTP hop remains an explicit lab simplification |
 | D23 — G: Versioned minimal EventBridge notifications with stable transition ID | Full business payload or events as commands | Limits sensitive copies and makes duplicates/order/reconciliation manageable; authority stays in HTTP |
-| D24 — G: Synchronous post-commit publish plus explicit history recovery | Transactional outbox/dispatcher | Respects the no-internal-queues constraint; does not falsely promise automatic delivery across the crash gap |
+| D24 — G: Transactional outbox and small dispatcher in the same image | Synchronous post-commit publish and operator-only recovery | Atomic BP history/outbox insertion closes the dual-write loss gap; stable IDs make crash retries deduplicable; no internal work queue or new deployment |
 | D25 — G: One provider standard SQS DLQ per cross-domain bus target | Drop failed events; provider owns consumer queue | Retains diagnosable target failures while preserving team/domain ownership; no SNS needed |
 | D26 — J: Workday-inspired native fixed AI functions and bounded text API | Host customer code or create an agent/tool runtime | Adds platform AI capability within core-service scope, not a second agent runtime |
 | D27 — J: Filter current object/field access before inference; recheck before response | Prompt the model with all tenant data and ask it to redact | Authorization is deterministic code, not model compliance; explains exactly when data leaves the service |
@@ -1229,61 +1244,30 @@ blocker. The existing contract remains unchanged until checkpoint 2 approval.
 | D39 — Scope: No CloudFront/X-Ray/Macie/CloudHSM, multi-AZ RDS, autoscaling, SNS or internal queues beyond target DLQs | Add production infrastructure wholesale | Each excluded service either lacks a current need, violates the plan/stack constraints, or is unavailable; production resemblance does not justify unused machinery |
 | D40 — Integration: Versioned HTTP plus explicit event/export exceptions, no shared DB/code | Import runtime internals or share persistence | Keeps independent ownership and testable contracts despite broader enterprise-service functionality |
 
-## 11. Open questions and decisions for the user
+## 11. Reviewer decisions and remaining deployment inputs
 
-**[Lab policy]** No implementation begins until these contract choices are
-reviewed; recommendations below are proposals, not inferred approval.
+**[Lab policy]** Q1–Q11 are resolved: grant renewal (D03), external credential
+custody (D08), transactional outbox (D24), HTTP event/export exceptions (D40),
+private path (D21/D22), deferred gateway (D11), bulk scale/balances/reports
+(D16–D20), cost/deletion (D15/D38), Nova Micro US processing (D29), null public
+domain (D36), and operational scope (D13/D33–D35) are approved. The four
+checkpoint-2 slices in §0 replace the former single implementation checkpoint.
 
-1. **OBO renewal:** approve requiring a current direct-human token plus the
-   existing grant for new ASU exchanges? Recommended for explicit OBO evidence,
-   but it changes renewal expectations for the runtime. Alternatively retain
-   grant-only renewal as an explicitly labeled lab shortcut. Legacy clients
-   remain compatible either way.
-2. **Credential custody:** approve the external-agent split: Mock Workday's
-   Secrets Manager/KMS verification store contains certificates/verifier hashes,
-   while the external signer owns its private key and secret copy? Reproducing
-   ASOR-managed private-key custody would be a distinct first-party flow.
-3. **Events versus no internal queues:** approve synchronous post-commit publish
-   plus operator history recovery, with the documented pre-acceptance loss gap?
-   If every commit must eventually publish automatically, authorize a small
-   transactional outbox/dispatcher exception before implementation. Target DLQs
-   do not resolve that gap.
-4. **Integration boundary exceptions:** approve versioned EventBridge
-   notifications and API-authorized 60-second presigned report URLs as explicit
-   exceptions to the existing HTTP-only/API-only wording? Report URLs remain
-   usable after grant revocation until expiry; stricter immediate revocation
-   would require API-proxied downloads instead.
-5. **Private path:** approve PrivateLink, one consumer AZ, private `.local` DNS,
-   and lab-CA TLS terminating at the NLB with HTTP on the provider backend?
-   Runtime team must supply the allowed principal, endpoint/DNS target, VPC
-   association, target event-bus ARN, tenant subscription list, and trusted-client
-   CA installation. These are checkpoint-3/4 prerequisites, not resources to
-   invent or create in the other repository.
-6. **Gateway scope:** recommend **deferring A2A/MCP endpoints**. Identity,
-   attenuation, data/report access and events already give a concrete core
-   integration. A second tool protocol would duplicate REST authorization and
-   introduce protocol/session/routing scope without an agreed consumer. Revisit
-   when a specific Workday-side tool/discovery interaction is selected; do not
-   label the REST service an A2A/MCP gateway.
-7. **Scale and reporting:** approve the separate bulk generator, read-only balance
-   snapshots without live accrual/debits, and bounded
-   synchronous worker-roster report, including the AWS-free local alternatives?
-   Larger/asynchronous reports require separate capacity and reliability work.
-8. **Deletion and cost:** approve the ~$0.140/hour baseline plus usage and the
-   clean-leftovers convention that explicitly lists nonbillable KMS keys during
-   their 7-day deletion wait? Tenant crypto-shredding covers objects/secrets
-   under its key, not RDS or already disclosed data.
-9. **Native AI:** approve Nova Micro with the explicit US cross-region processing
-   exception, pre-prompt authorization, small context and conservative daily
-   reservations? If Ohio-only processing is required, choose a verified
-   in-region model and reprice it before implementation; no silent fallback.
-10. **Public domain:** the null default keeps D1 behavior. Supply an externally
-    controlled domain/subdomain only if public DNS/TLS is desired at checkpoint
-    4; registration and parent-zone delegation remain the user's responsibility.
-11. **Operational scope:** approve the exact EMF dimensions/dashboard/alarms,
-    tenant-tagged role sessions, and minimal public WAF policy/cost as described.
-    Unknown Workday internals do not block these labeled lab choices.
+**[Lab policy]** Private transport names and certificate SANs use
+`{slug}.mockworkday.internal`, avoiding `.local` mDNS conflicts; ICANN reserved
+`.INTERNAL` for private use ([ICANN resolution][icann-internal]). Canonical
+issuer/audience strings remain exactly `.mockworkday.local`, including JWT
+assertion audiences. Private and optional public names are explicit aliases
+for tenant routing, never alternate identity issuers.
 
+**[Lab policy]** Remaining checkpoint-3/4 inputs: runtime allowed principal,
+consumer endpoint/DNS target, VPC association, destination event bus ARN and
+tenant subscriptions; runtime clients must install the lab CA trust anchor.
+No public domain has been supplied; its variable remains null. No further
+checkpoint-1 decision blocks slice 2a. Later slices and infrastructure retain
+their separate commit/review stops.
+
+[icann-internal]: https://www.icann.org/en/board-activities-and-meetings/materials/approved-resolutions-special-meeting-of-the-icann-board-29-07-2024-en
 [wd-security]: https://doc.workday.com/admin-guide/en-us/workday-ai/agents/agent-security/concept--agent-security.html
 [wd-external-requested]: https://doc.workday.com/admin-guide/en-us/workday-ai/agents/agent-system-of-record/external-agents/configure-external-agents.html
 [wd-external-current]: https://doc.workday.com/admin-guide/en-us/workday-ai/agents/external-agents/configure-external-agents.html?toc=0.8.1
