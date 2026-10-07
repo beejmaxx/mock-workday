@@ -452,3 +452,23 @@ Runtime endpoint/VPC association and receiver bus/queue remain consumer-owned.
 Checkpoint 3 ran no deployment or cleanup commands. The updated `aws-up` and
 `aws-down` paths are for checkpoint 4 only, after plan approval. Recheck the
 operator /32, image tag and certificate plan before applying.
+
+### M3 live provider validation (checkpoint 4)
+
+The approved `5fa0502` deployment and validation are recorded in
+[the live validation report](docs/m3-validation.md), including failures and the
+consumer-dependent checks that remain unverified. Mock Workday service teardown
+succeeded, but the clean-inventory gate is blocked by five runtime/platform-owned
+resources reported by the account-wide checker; they were left untouched.
+`make aws-up` (using the
+existing `DOCKER_CONTEXT=colima-s1-builder`) ran TLS enrollment/storage, bootstrap,
+all three bulk imports and disabled-ASU seeding; `make aws-smoke` passed.
+
+The AWS bulk dataset has 3,584 workers and 14,336 S3 documents totaling
+146,761,728 bytes. Manifest hashes, all generated table counts and S3 inventories
+matched. Measured RDS database size after validation was 45,094,579 bytes;
+allocated RDS storage remains 20 GB. The migration task took about 10m50s.
+The separate ASU seed adds two non-human accounts per tenant beyond bulk manifest
+human-account counts. Original small fixtures were preserved until the deliberate
+isolated Globex deletion check. Three native-AI calls consumed 597 input and 365
+output tokens. This is lab evidence; it does not describe Workday infrastructure.

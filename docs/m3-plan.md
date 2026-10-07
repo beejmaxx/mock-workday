@@ -234,3 +234,12 @@ Live checkpoint-4 proof still includes WAF/SCP permissions, CA trust/private DNS
 wrong/missing STS tags, KMS/secret rejection, real encrypted DLQ delivery and alarm
 behavior, Bedrock profile access and authorized synthetic inference, bulk import,
 crypto-shredding and final teardown inventory. These are not implied by plan success.
+
+## Checkpoint 4 execution
+
+The user approved `5fa0502` and checkpoint 4 on 2026-10-08. The fresh deployment
+plan was reviewed before apply: 115 creates, exactly the provider-only plan plus
+the enrolled TLS listener and expected ECS target attachment. The live results,
+probe failures/recovery, consumer-dependent gaps and teardown evidence are in
+[the checkpoint-4 validation report](m3-validation.md). Earlier statements in this
+document about unexecuted deployment describe checkpoint 3, not that later run.

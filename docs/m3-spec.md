@@ -1291,6 +1291,8 @@ association authorization when a consumer VPC is supplied. A null imported
 certificate ARN stages the NLB without a TLS listener; certificate enrollment
 remains outside Terraform and adding its ARN adds the listener/target attachment.
 See [the checkpoint-3 plan report](m3-plan.md) for counts, costs and limitations.
+The subsequent approved deployment, measured seed sizes, live checks, failures
+and cleanup are recorded in [checkpoint-4 validation](m3-validation.md).
 
 ## 11. Reviewer decisions and remaining deployment inputs
 
