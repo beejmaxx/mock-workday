@@ -212,7 +212,10 @@ def test_T_D1_05_name_tag_boundary(inventory, name, fails):
     responses["ec2", "describe-volumes"]["Volumes"] = [
         {
             "VolumeId": "vol-test",
-            "Tags": [{"Key": "Name", "Value": name}],
+            "Tags": [
+                {"Key": "Name", "Value": name},
+                {"Key": "lab", "Value": "agent-runtime"},
+            ],
         }
     ]
     if fails:
@@ -273,3 +276,69 @@ def test_T_D1_05_native_other_owner_tags_without_index(inventory, capsys):
         in output
     )
     assert "REMAINS" not in output
+
+
+@pytest.mark.parametrize(
+    "service, action, field, item, kind, identifier",
+    [
+        (
+            "ec2",
+            "describe-nat-gateways",
+            "NatGateways",
+            {"NatGatewayId": "nat-unknown", "State": "available"},
+            "NAT gateway",
+            "nat-unknown",
+        ),
+        (
+            "ec2",
+            "describe-addresses",
+            "Addresses",
+            {"AllocationId": "eipalloc-unknown"},
+            "Elastic IP",
+            "eipalloc-unknown",
+        ),
+        (
+            "ec2",
+            "describe-volumes",
+            "Volumes",
+            {"VolumeId": "vol-unknown"},
+            "EBS volume",
+            "vol-unknown",
+        ),
+        (
+            "rds",
+            "describe-db-instances",
+            "DBInstances",
+            {"DBInstanceIdentifier": "unknown-db"},
+            "RDS instance",
+            "unknown-db",
+        ),
+        (
+            "secretsmanager",
+            "list-secrets",
+            "SecretList",
+            {"ARN": "unknown-secret"},
+            "secret (including pending deletion)",
+            "unknown-secret",
+        ),
+        (
+            "elbv2",
+            "describe-load-balancers",
+            "LoadBalancers",
+            {"LoadBalancerArn": "unknown-lb"},
+            "load balancer",
+            "unknown-lb",
+        ),
+    ],
+)
+def test_T_D1_05_untagged_cost_bearing_resource_fails(
+    inventory, capsys, service, action, field, item, kind, identifier
+):
+    leftovers, responses = inventory
+    responses[service, action][field] = [item]
+    responses["elbv2", "describe-tags"] = {"TagDescriptions": [{"Tags": []}]}
+    with pytest.raises(SystemExit, match="UNKNOWN OWNER cost-bearing"):
+        leftovers.main()
+    output = capsys.readouterr().out
+    assert f"UNKNOWN OWNER {kind}: {identifier}" in output
+    assert "No disposable/billable leftovers found" not in output

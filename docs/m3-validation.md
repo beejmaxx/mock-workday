@@ -268,6 +268,25 @@ Historical EMF series, stale tagging-index entries, stopped tasks and inactive
 task definitions were informational. ECR and platform state/foundation remain
 intentional exemptions; their storage costs are not asserted to be zero.
 
+### Unknown-owner regression follow-up
+
+The reviewer identified that resources without either Mock Workday attribution
+or the shared lab tag were being omitted. They now appear with kind and ID as
+`UNKNOWN OWNER`; cost-bearing entries fail the shared down/leftovers checker.
+Unknown ENIs/logs and metadata remain visible as informational entries for the
+reasons recorded in the code and spec D53.
+
+Live `make aws-leftovers` completed at **2026-10-07 22:16:30 UTC** with **exit 0**:
+**0 owned leftovers**, **0 unknown-owner cost-bearing resources**,
+**6 pending-deletion keys**, **34 other-owner entries** and
+**16 informational unknown-owner metadata entries** (default event bus and IAM roles).
+No resource was tagged, deleted or otherwise changed. Evidence:
+`.local/m3-leftovers-unknown-owner.log`.
+
+`uv run --frozen pytest tests/test_leftovers.py tests/test_m3_infra.py -q` passed
+**25 tests**, including untagged NAT, EIP, load balancer, EBS, RDS and secret
+failure cases. Ruff and `git diff --check` passed. Checkpoint 4 remains accepted.
+
 Local evidence is in ignored `.local/m3-checkpoint4-*.log`, `m3-*-probes*.log`,
 `m3-deployment.json`, `m3-s3-seed-inventory.json`, `m3-kms-cloudtrail.json`,
 `m3-observability.json`, `.local/m3-leftovers-owned-scope*.log`, and specific

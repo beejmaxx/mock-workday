@@ -59,7 +59,7 @@ These are the only code changes, and the local workflow must keep working unchan
 | `make aws-up` | Apply `registry`; build the ARM64 image locally; push it to ECR; apply `service`; run the migration task; wait for the service to become healthy |
 | `make aws-smoke` | Smoke test against the load balancer with `Host: acme.mockworkday.local`: Alice gets a token; reads Bob (200); Bob's compensation as Alice (403); Globex worker from the Acme host (404); revoked-grant token rejected (401) |
 | `make aws-down` | Destroy `service` only; then run the leftover check |
-| `make aws-leftovers` | List anything billable or tagged `Project=mock-workday` that remains. Check load balancers, target groups, ECS services and tasks, RDS instances and snapshots, NAT gateways, Elastic IPs, unattached ENIs, EBS volumes, Secrets Manager secrets (including pending deletion), and log groups. Check `us-east-2`, plus CloudWatch Logs in `us-east-1`. Exit nonzero for Mock Workday-owned leftovers or inventory errors; report other `lab=agent-runtime` owners with tags as information (M3 decision D53). |
+| `make aws-leftovers` | List anything billable or tagged `Project=mock-workday` that remains. Check load balancers, target groups, ECS services and tasks, RDS instances and snapshots, NAT gateways, Elastic IPs, unattached ENIs, EBS volumes, Secrets Manager secrets (including pending deletion), and log groups. Check `us-east-2`, plus CloudWatch Logs in `us-east-1`. Exit nonzero for Mock Workday-owned leftovers, unknown-owner cost-bearing resources or inventory errors; report other `lab=agent-runtime` owners with tags as information (M3 decision D53). |
 
 The README gets an "AWS dev" section: prerequisites, the commands above, approximate hourly cost, and a reminder to run `make aws-down`.
 
@@ -118,12 +118,15 @@ Prod; TLS and custom domains; CI/CD; Multi-AZ RDS; autoscaling; WAF; running the
 Leftover-check verdicts use service-specific list/describe results, not the
 Resource Groups Tagging API. Tag-only entries are informational warnings because
 that index can retain deleted resources. **Lab policy (M3 D53):** ownership comes
-from `Project=mock-workday` or the service's name prefixes; unrelated resources
-cannot fail the verdict. Other `lab=agent-runtime` resources and their owner tags
+from `Project=mock-workday` or the service's name prefixes; resources attributed
+to another lab owner do not fail the verdict. Unattributed cost-bearing resources
+fail as `UNKNOWN OWNER` with kind and ID; unknown ENIs and log groups stay
+informational for the reasons in M3 D53. Other `lab=agent-runtime` resources and their owner tags
 appear in an informational other-owners section. Owned target groups, ECS
 clusters/services and unattached ENIs fail alongside the listed billable resources. ECS tasks are described and STOPPED
 tasks are ignored; task definitions (including INACTIVE revisions) do not trigger
-failure. Active tasks and the other listed resources fail only when Mock Workday owns them.
+failure. Active tasks and other listed cost-bearing resources fail when Mock Workday owns
+them or their ownership is unknown.
 Inventory errors, including tag reads, always fail.
 Expected persistent registry/platform resources remain exempt.
 

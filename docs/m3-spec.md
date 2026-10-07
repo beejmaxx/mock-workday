@@ -1154,8 +1154,8 @@ and must be tested as an isolated synthetic-tenant scenario at checkpoint 4.
    private files. A fresh deployment gets fresh keys and deterministic seed IDs.
 
 **[Lab policy]** `aws-leftovers` uses service inventories, preserving D1's stale
-tag handling. Both `aws-down` and `aws-leftovers` fail only for Mock Workday-owned
-resources in the enumerated D1/M3 resource classes: ownership is
+tag handling. Both `aws-down` and `aws-leftovers` fail for Mock Workday-owned
+resources and unattributed cost-bearing resources in the enumerated D1/M3 classes: ownership is
 `Project=mock-workday` or a Mock Workday resource/Name prefix (`mock-workday`,
 including `mock-workday-dev`, or tenant buckets `mw-729608197929-`). Service
 list/describe results establish existence; tags establish ownership, and a stale
@@ -1167,7 +1167,15 @@ including their owner tags. Keep the Virginia inventory limited to Logs, using
 its native tag API; do not broaden the account's regional permissions. Live S1
 resources and permanent platform cost-guard logs are expected other owners,
 not cleanup obligations. Never delete another owner's resources to make this
-check pass. Inventory/API errors still fail, including tag-read errors.
+check pass. Resources with neither Mock Workday attribution nor `lab=agent-runtime`
+are printed as **UNKNOWN OWNER** with kind and ID. Cost-bearing resources fail:
+load balancers, active ECS tasks, RDS instances/snapshots/backups, NAT gateways,
+EIPs, EBS volumes, secrets, and any inventoried buckets, KMS keys, hosted zones,
+DLQs, alarms, dashboards or WAF ACLs. Unknown unattached ENIs and log groups stay
+informational: ENIs have no standalone hourly charge; logs may be service-created
+or shared platform history requiring operator attribution. Other unknown metadata
+without standalone capacity charges is informational too; none is silently dropped.
+Inventory/API errors still fail, including tag-read errors.
 
 Add S3 buckets/objects/versions/uploads, KMS keys/aliases/deletion
 dates, all ASU and TLS secrets, imported ACM certs, private hosted zones and
@@ -1176,7 +1184,7 @@ EventBridge buses/rules/targets, SQS DLQs and alarms, the EMF dashboard, WAF ACL
 ACM certificates, and tenant-data role/policies. Keep D1 RDS/snapshot/task/
 IP/ENI/log checks and both log Regions. API errors fail the check.
 
-**[Lab policy]** A clean verdict means no remaining Mock Workday-owned service resources in these inventories,
+**[Lab policy]** A clean verdict means no remaining Mock Workday-owned service resources or unknown-owner cost-bearing resources in these inventories,
 plus an explicit inventory of expected nonbillable KMS keys in `PendingDeletion`
 with dates. Do not print “nothing remains” while keys still exist. Recheck after
 their dates. Enabled or merely Disabled unscheduled CMKs fail; so do remaining
@@ -1292,7 +1300,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D50 — D/F: Account-root PrivateLink permission plus explicit endpoint acceptance; null consumer inputs skip consumer-dependent resources | Path-bearing role principal; broad automatic acceptance; fabricated consumer IDs | Avoids the observed InvalidPrincipal failure, keeps access bounded to approved endpoint IDs and lets each domain deliver its own infrastructure independently |
 | D51 — F: Null imported-certificate ARN stages provider NLB; owner enrollment supplies the ARN for TLS activation | Terraform-generated private keys in state; dummy deployable certificate | Preserves the approved custody boundary and makes the activation step reviewable without paid changes at checkpoint 3 |
 | D52 — C/H: Exact configured owner principal (IAM user or role in the provider account) for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account identities from bucket reads/inventory and secret access; validates an exact ARN without wildcards and does not modify the operator IAM identity |
-| D53 — E: Owner-scoped teardown verdict, with other owners and their tags reported separately (lab policy) | Fail on all account resources or delete unrelated resources to obtain a clean result | Concurrent S1 work and permanent platform infrastructure have independent owners/lifecycles; service existence plus own tags/names preserves cleanup accountability without disrupting them. Inventory errors still fail, while stale tag entries and scheduled KMS deletion remain explicit information |
+| D53 — E: Owner-scoped teardown verdict, with other owners and their tags reported separately (lab policy) | Fail on all account resources or delete unrelated resources to obtain a clean result | Concurrent S1 work and permanent platform infrastructure have independent owners/lifecycles; service existence plus own tags/names preserves cleanup accountability without disrupting them. Unknown-owner cost-bearing resources and inventory errors still fail, while stale tag entries and scheduled KMS deletion remain explicit information |
 
 
 **[Lab policy]** Slice 2d implementation details and response shapes are now in

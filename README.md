@@ -226,7 +226,8 @@ study sessions.** RDS provisioning may take several minutes. Destroying the
 service retains the registry and platform; image/state storage can still incur
 small charges. The leftover checker scans the dev account for the listed resource
 classes (including untagged resources with Mock Workday names and logs in
-`us-east-1`). It fails only for Mock Workday-owned leftovers or inventory errors;
+`us-east-1`). It fails for Mock Workday-owned leftovers, unknown-owner cost-bearing resources,
+or inventory errors;
 other `lab=agent-runtime` owners appear separately with their tags. Service-specific list/describe calls determine
 failure; tag-only findings are informational warnings and do not fail the check.
 STOPPED tasks and task definitions do not count as active leftovers. Owned target

@@ -8,6 +8,26 @@ from common import aws
 
 def main():
     remaining = []
+    # These inventories represent compute, allocated capacity, storage or paid
+    # configuration. Missing attribution must not hide a potential cost leak.
+    cost_bearing = {
+        "load balancer",
+        "ECS task",
+        "RDS instance",
+        "RDS snapshot",
+        "RDS automated backup",
+        "NAT gateway",
+        "Elastic IP",
+        "EBS volume",
+        "secret (including pending deletion)",
+        "tenant bucket",
+        "KMS key",
+        "hosted zone",
+        "provider DLQ",
+        "alarm",
+        "dashboard",
+        "WAF ACL",
+    }
 
     tagged = {}
     # D1 permits only Logs inventory in us-east-1; the tag index is Ohio-only.
@@ -63,11 +83,20 @@ def main():
             print(f"REMAINS {kind}: {identifier}")
         elif indexed.get("lab") == "agent-runtime":
             other_owners[canonical] = indexed
+        elif kind in cost_bearing:
+            remaining.append((kind, identifier))
+            print(f"UNKNOWN OWNER {kind}: {identifier}")
+        else:
+            # Unattached ENIs have no standalone hourly charge. Log groups can
+            # be service-created/shared platform history, so leave attribution
+            # to the operator instead of treating their presence as a service leak.
+            # Other kinds here are metadata without standalone capacity charges.
+            print(f"INFO UNKNOWN OWNER {kind}: {identifier}")
 
     def is_owned(identifier, tags=()):
         return owned(identifier, tags) or owned(identifier, tagged.get(identifier, {}))
 
-    # Enumerate broadly; fail only on service-owned resources, including untagged names.
+    # Enumerate broadly; fail on owned leftovers and unattributed cost-bearing resources.
     for item in aws("elbv2", "describe-load-balancers")["LoadBalancers"]:
         record(
             "load balancer",
@@ -193,10 +222,10 @@ def main():
             )
     if remaining:
         raise SystemExit(
-            f"{len(remaining)} resource(s) remain owned by Mock Workday; review the inventory."
+            f"{len(remaining)} resource(s) remain: Mock Workday-owned or UNKNOWN OWNER cost-bearing; review the inventory."
         )
     print(
-        "No disposable/billable leftovers found for Mock Workday. Pending KMS deletions, if any, remain inventoried above. Platform state, network, SSM and registry are intentionally retained."
+        "No disposable/billable leftovers found for Mock Workday; no unknown-owner cost-bearing resources found. Pending KMS deletions, if any, remain inventoried above. Platform state, network, SSM and registry are intentionally retained."
     )
 
 
