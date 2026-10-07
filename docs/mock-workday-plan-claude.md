@@ -42,7 +42,7 @@ customer agents (untrusted)  ->  Agent Cell Runtime  ->  Mock Workday API  ->  M
                                                           authorizes independently)
 ```
 
-- **Separate repository (decided).** This repository owns Mock Workday's code, database, and process. The runtime lives in [`agent-cell-runtime`](https://github.com/beejmaxx/agent-cell-runtime). Separate repositories make the ownership boundary mechanical, including for coding agents that might otherwise import or copy internals.
+- **Separate repository (decided).** This repository owns Mock Workday's code, database, and process. The runtime lives in [`agent-cell-runtime`](https://github.com/beejmaxx/agent-cell-runtime). Separate repositories enforce an ownership convention, not a security boundary; they make it harder for people and coding agents to import or copy internals by accident.
 - **Published contract.** Mock Workday publishes an OpenAPI document and a container image. The runtime consumes only those: no shared ORM models, no database access. Integration tests run the published image alongside the runtime.
 - Mock Workday is built first. After its exit criteria pass, it changes only through versioned API changes driven by runtime needs.
 
@@ -89,7 +89,11 @@ These are the kinds of interaction the runtime must handle, independent of which
 ### Tokens
 
 - Mock Workday is the issuer.
-- Short-lived signed tokens carry identity only (`iss`, `aud`, `sub`, `act`, `scope`, `exp`, `jti`).
+- Short-lived signed tokens carry identity only (`iss`, `aud`, `sub`, `act`, `scope`, `exp`, `jti`, and a grant ID for delegated tokens).
+- **Signing (decided):** RS256 JWTs with `kid`, published through a JWKS endpoint.
+  - One signing key per tenant, so an Acme key cannot mint Globex tokens even through a bug.
+  - Validation uses an algorithm allowlist plus the tenant's expected issuer and audience.
+  - Key rotation gets a test.
 - Group membership is resolved per request, so revocation takes effect immediately.
 - No full OAuth flows in v1.
 - **Lifetimes (decided, lab policy):**
@@ -104,6 +108,12 @@ These are the kinds of interaction the runtime must handle, independent of which
 - The client exchanges that grant for a delegated token.
 - Minimum surface: one endpoint to create grants and one token endpoint.
 - Delegated identity is always issued by Mock Workday, never asserted by the caller.
+- **Per-request grant check (decided):** every delegated request verifies that:
+  - the grant and the client are still active;
+  - the grant has not expired;
+  - the grant's current scopes permit the operation.
+
+  Revoking a grant therefore takes effect immediately, not when the token expires. Test: revoke the grant, then reuse the same access token.
 
 ```text
 effective access = user's current permissions
@@ -145,6 +155,7 @@ principal -> role assignments / self / integration group
   - worker basic data
   - worker organizations
   - worker compensation
+  - absence (time-off requests, including their free-text reasons)
   - documents (one or more document domains)
 - Compensation is secured separately from basic worker data.
 - **One authorization pipeline** for humans and integrations; only authentication differs.
@@ -154,6 +165,11 @@ principal -> role assignments / self / integration group
 - Every read path is authorized: worker history, business-process events, direct reports, and documents.
 - History is field-filtered by domain.
 - **Visibility (lab policy):** an object the caller cannot see returns 404; lists omit unauthorized rows.
+- **Historical reads use current authority (decided, lab policy).**
+  - `as_of` selects which business data to read.
+  - The caller is always authorized by their current access.
+  - After Bob transfers, Alice cannot recover access to him by asking about an earlier date.
+- **Absence (decided, lab policy):** time-off requests and reasons are readable by the worker, their current manager, and their HR Partner. "Low risk" describes the action, not the content.
 
 ### Configuration
 
@@ -186,6 +202,12 @@ Document
 
 **Writes:** `POST /documents` is deliberately included. A writable document that others can read is an exfiltration channel the runtime must defend against.
 
+**Creation constraints (decided, lab policy):** callers cannot freely choose security labels, because downstream policy cannot trust them.
+
+- A caller may create documents only in domains where they have modify permission.
+- The owner must be a worker the caller is allowed to act for.
+- Each domain defines a minimum classification. Callers may raise a document's classification, never lower it below that floor.
+
 **Content:**
 
 - Text only; no PDF parsing.
@@ -209,8 +231,9 @@ TimeOffRequest
   worker_id, start_date, end_date, reason (free text), status
 ```
 
-- The employee initiates for themselves; their manager approves or denies.
-- The employee may cancel while the request is in progress.
+- The employee initiates for themselves.
+- **Approver (decided, lab policy):** the worker's current manager at the time of the approval action. If Bob transfers while a request is pending, Alice approves before Nov 1 and Priya on or after it.
+- The employee may cancel while the request is in progress. Cancellation racing approval is resolved by the event version.
 - No balances, accruals, calendars, carryover, or regional policy.
 
 ### Change Job (high consequence): example
@@ -240,7 +263,23 @@ TimeOffRequest
 IN_PROGRESS(step n) -> SUCCESSFULLY_COMPLETED | DENIED | CANCELED
 ```
 
-The effect is applied in the same transaction as the final step, so "approved but not applied" never exists.
+**Effective-dated commit (decided):** the final step's transaction commits the outcome and its effective-dated revisions:
+
+```text
+final approval transaction:
+    record the job revision, effective on the event's effective date
+    record the compensation revision, if any
+    record process history and object audit
+    commit
+```
+
+- No scheduler and no second "apply" transaction. The new revision becomes current when its effective date arrives.
+- "Approved but not recorded" never exists.
+- **No backdating in v1:** effective dates cannot be earlier than the initiation date.
+- **One pending Change Job per worker (decided):**
+  - "Pending" means in progress, or completed but not yet effective.
+  - Because "not yet effective" depends on time, a unique index cannot enforce this.
+  - Initiation and final approval check the rule while holding a lock on the worker's row, so two concurrent initiations cannot both pass.
 
 ### Change Job routing (decided, lab policy)
 
@@ -265,7 +304,10 @@ Before the effective date, Priya has no domain access to Bob, yet she must appro
 
 ### Access switchover
 
-Before Nov 1, Alice still sees Bob and the Finance manager does not. On and after Nov 1, the reverse holds. As-of reads demonstrate both.
+Before Nov 1, Alice still sees Bob and the Finance manager does not. On and after Nov 1, the reverse holds.
+
+- The switch happens with no event at that moment, so authorization-decision audit records which job revision a decision relied on.
+- Lesson for the runtime: cached authorization decisions become wrong at an effective-date boundary.
 
 ## Runtime-facing API contract
 
@@ -273,13 +315,19 @@ Before Nov 1, Alice still sees Bob and the Finance manager does not. On and afte
   - Scoped to tenant plus principal.
   - Bound to a hash of the request.
   - Reusing a key with a different request is rejected.
+  - Retained for 24 hours (decided). After that, a reused key is a new request, so runtime retries must finish within the window.
+  - **Processing order (decided):** authenticate, then look up the key, before any version check.
+  - **Replay (decided, lab policy):** a replay of a completed operation re-authorizes the caller first. If still authorized, it returns the recorded result rather than a misleading 409. If no longer authorized, it is denied without revealing the outcome. The runtime must then treat the outcome as unknown and resolve it some other way.
 - **Optimistic concurrency:** step actions name the expected step and event version; a lost race returns 409.
 - **Error semantics** documented for 401, 403, 404, 409, 429, and 503.
 - **Correlation:** caller-supplied request IDs are recorded in audit and grant no authority.
-- **Pagination:** list endpoints (e.g. `GET /workers?org=...&limit=50&cursor=...`) use opaque cursors over a stable order.
+- **Pagination (decided):** keyset pagination over each record's immutable ID, e.g. `GET /workers?org=...&limit=50&cursor=...`.
+  - **Never duplicates**, even while data changes.
+  - **Complete** when the data and the caller's authorization do not change during the scan.
+  - Records that enter the result set mid-scan behind the cursor (e.g. a worker moved into the org) may be missed.
   - Authorization is evaluated on every page, so access lost mid-scan takes effect on the next page.
-  - Cursors are bound to the caller and tenant.
-  - Cursor expiry and behavior when data changes between pages are specified, not accidental.
+  - Cursors are opaque and bound to caller, tenant, and query filters.
+  - Snapshot pagination (recorded-time watermarks) is an optional later exercise.
 - **Rate limiting:** per API client per tenant.
   - Deterministic and testable: driven by the controllable clock.
   - Returns 429 with `Retry-After`.
@@ -323,8 +371,8 @@ Python, FastAPI, PostgreSQL, SQLAlchemy, pytest, and Docker Compose.
 
 | Milestone | Scope | Exit evidence |
 |---|---|---|
-| **M1: Foundation** | Tenancy and identity (including delegation), the HCM graph with effective dating, security, documents, authorized read APIs and history, paginated listing, rate limiting, object and authorization-decision audit | Visibility matrix passes: self, inheritance, siblings, cross-tenant, compensation separation, document domains, delegation intersection, as-of reads, and role revocation mid-session. Bulk-scan contract passes: an integration user pages through the Acme workers it may see, receives deterministic 429s with `Retry-After`, continues with its cursor without duplicates or gaps, and loses access mid-scan when its permissions are revoked |
-| **M2: Actions** | Process model, Request Time Off, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny race, lost response after commit, conflicting key reuse, employee cancellation, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
+| **M1: Foundation** | Tenancy and identity (including delegation), the HCM graph with effective dating, security, documents, authorized read APIs and history, paginated listing, rate limiting, object and authorization-decision audit | Visibility matrix passes: self, inheritance, siblings, cross-tenant, compensation separation, document domains, delegation intersection, as-of reads, and role revocation mid-session. Bulk-scan contract passes: an integration user pages through the Acme workers it may see, receives deterministic 429s with `Retry-After`, continues with its cursor without duplicates (and without gaps when nothing changes), and loses access mid-scan when its permissions are revoked. Delegation: revoking a grant invalidates an unexpired token; as-of reads never restore lost access |
+| **M2: Actions** | Process model, Request Time Off, narrowed Change Job, process history, idempotency, concurrency control, failure injection | Approve-versus-deny and cancel-versus-approve races, concurrent Change Job initiations for one worker, lost response after commit (replay returns the recorded result), replay after permission loss (denied), conflicting key reuse, time-off routing after a manager change, step-scoped visibility for the receiving manager, and the effective-date access switchover behave as specified |
 
 After M2, the Agent Cell Runtime begins. Mock Workday changes only through versioned API changes the runtime needs.
 
@@ -337,7 +385,7 @@ Acme:   Dana (CEO, Executive)
           │    └─ Frank (Manager, Platform) └─ Grace
           └─ Priya (Manager, Finance)
         Carol (HR Partner assigned on Engineering and Finance; sits in HR)
-        Compensation Partner: to be assigned in the spec
+        Connie (Compensation Partner assigned on Engineering and Finance)
 Globex: Dave (Manager) └─ Eve
 ```
 
@@ -350,7 +398,7 @@ Globex: Dave (Manager) └─ Eve
 
 ## Backlog (not before the runtime)
 
-- **Change bank details (first addition after M2):** combines a sensitive write, financial consequence, social engineering, prompt injection, human confirmation, fraud detection, and audit. Payroll diversion through a manipulated agent is the realistic version of "prompt injection causes harm." It requires a new payment domain, so it does not block the runtime.
+- **Change bank details (candidate addition, only if runtime work requires it):** combines a sensitive write, financial consequence, social engineering, prompt injection, human confirmation, fraud detection, and audit. Payroll diversion through a manipulated agent is the realistic version of "prompt injection causes harm." It requires a new payment domain, so it does not block the runtime.
 - Termination
 - Hire
 - Rescind
@@ -380,9 +428,8 @@ Globex: Dave (Manager) └─ Eve
    - effective dating
    - process history and audit features
    - public object and reference shapes
-2. Resolve the remaining decisions:
-   - subordinate-inheritance defaults
-   - token format and signing keys
-   - idempotency-key retention
-   - which Acme worker holds the Compensation Partner role
+2. Resolve subordinate inheritance after verification.
+   - Workday appears to configure this on the role-based security group, with an option like "current organization and unassigned subordinates" (*unverified*).
+   - If so, Alice's Manager access might not extend to Platform, where Frank holds the Manager role. That would change the seed test "Alice sees Grace."
+   - Model it as a security-group setting and choose the value once verified.
 3. Write the detailed spec and test matrix. Implementation starts only after approval.
