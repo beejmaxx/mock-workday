@@ -20,13 +20,15 @@ The network belongs to the platform foundation, not to Mock Workday. Mock Workda
 
 | Stack | Repository and path | Lifetime | Contents |
 |---|---|---|---|
-| `bootstrap` | `agent-cell-runtime/infra/bootstrap` (local state, gitignored) | persistent | S3 state bucket: versioning, SSE-S3 encryption, public access blocked, `prevent_destroy` |
-| `foundation` | `agent-cell-runtime/infra/envs/dev/foundation` | persistent (no hourly cost) | VPC, 2 public and 2 private subnets across two Availability Zones, internet gateway, route tables. **No NAT gateway.** Publishes IDs to SSM Parameter Store under `/lab/dev/network/` (`vpc_id`, `public_subnet_ids`, `private_subnet_ids`). |
+| `bootstrap` | `agent-cell-runtime/infra/platform/envs/dev/bootstrap` (local state, gitignored) | persistent | This account's S3 state bucket `beejmaxx-lab-tfstate-dev`: versioning, SSE-S3 encryption, public access blocked, `prevent_destroy`. **One state bucket per account**; prod gets its own in the prod account. |
+| `foundation` | `agent-cell-runtime/infra/platform/envs/dev/foundation` | persistent (no hourly cost) | VPC, 2 public and 2 private subnets across two Availability Zones, internet gateway, route tables. **No NAT gateway.** Publishes IDs to SSM Parameter Store under `/lab/dev/network/` (`vpc_id`, `public_subnet_ids`, `private_subnet_ids`). |
 | `registry` | `mock-workday/infra/envs/dev/registry` | persistent (pennies) | ECR repository `mock-workday`: scan on push, a lifecycle policy keeping the last 5 images, `force_delete` |
 | `service` | `mock-workday/infra/envs/dev/service` (built from `mock-workday/infra/modules/service`) | **disposable** | Everything billed by the hour (below) |
 
 - Every stack except `bootstrap` uses the S3 backend with `use_lockfile = true` and a distinct state key per stack.
 - Mock Workday's stacks read the network only from SSM parameters, never from the foundation's Terraform state.
+- `modules/service` is environment-neutral: dev-only behavior (test admin, ECS Exec) is controlled by variables that default to off. Image tag or digest, `allowed_cidr`, sizing, and log retention are variables. Prod later reuses the module with its own small composition.
+- Prod will run the exact image digest verified in dev (build once, promote by digest), not a rebuild.
 
 ## Service stack
 
