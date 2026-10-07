@@ -586,7 +586,10 @@ NLB security groups on 8080 only; no load balancer reaches 8081 or RDS.
 **[Lab policy]** Runtime owns its interface endpoint, endpoint security group,
 and trusted-client egress rules. Start with one consumer AZ for cost, knowingly
 without HA. Allow only that consumer's approved AWS principal to request a
-connection; accept only the approved endpoint ID. Neither PrivateLink nor an
+connection using an explicit account-root ARN (`arn:aws:iam::<account>:root`);
+accept only the approved endpoint ID. AWS endpoint-service permissions reject
+IAM role path components, as verified by the runtime team; do not pass a
+`role/managed/...` ARN here. Account permission never bypasses acceptance. Neither PrivateLink nor an
 IP address is tenant authentication: normal Host/JWT authorization still runs.
 No wildcard allowed principals. If NLB inbound evaluation for PrivateLink is
 disabled, keep direct NLB ingress closed and rely on approved endpoint
@@ -1270,11 +1273,24 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D47 — J: Refund never-dispatched expired reservations; retain uncertain dispatched charges, settle late actual usage once | Refund every expired lease; permanently charge successful calls their full reservation | Prevents timeout overspend while recovering concurrency and known unused budget; ties settlement to the original UTC day |
 | D48 — J: All explicit document authorization precedes body fetch; server-only source references and post-call reauthorization | Best-effort partial document answers; trust model citations; authorize only at token issuance | Keeps authorization inspectable, avoids source enumeration and discards answers after revocation without pretending to retract sent prompts |
 | D49 — M: Fixed dev environment and specified dimensions; fake uses the same local metric shape | Caller-selected dimensions; tenant dimensions on every request metric | Matches the single disposable lab deployment, bounds custom-metric cardinality, and tests EMF without creating paid metrics |
+| D50 — D/F: Account-root PrivateLink permission plus explicit endpoint acceptance; null consumer inputs skip consumer-dependent resources | Path-bearing role principal; broad automatic acceptance; fabricated consumer IDs | Avoids the observed InvalidPrincipal failure, keeps access bounded to approved endpoint IDs and lets each domain deliver its own infrastructure independently |
+| D51 — F: Null imported-certificate ARN stages provider NLB; owner enrollment supplies the ARN for TLS activation | Terraform-generated private keys in state; dummy deployable certificate | Preserves the approved custody boundary and makes the activation step reviewable without paid changes at checkpoint 3 |
+| D52 — C/H: Exact existing owner role for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account roles from bucket reads/inventory and secret access; does not modify the platform owner role |
+
 
 **[Lab policy]** Slice 2d implementation details and response shapes are now in
 [contract §6.8](spec.md#68-native-ai-and-metering-workday-inspired-features-lab-policy-implementation);
 no model-access enablement, inference, metrics resources or infrastructure deployment
 was performed at this checkpoint.
+
+**[Lab policy — checkpoint 3]** Optional consumer principal/VPC/endpoint/target-bus
+inputs and public domain default to null. The provider-only plan skips consumer
+authorization, records, acceptance, forwarding targets/DLQs and target alarms.
+The private zone starts associated only with the provider VPC; its owner emits
+association authorization when a consumer VPC is supplied. A null imported
+certificate ARN stages the NLB without a TLS listener; certificate enrollment
+remains outside Terraform and adding its ARN adds the listener/target attachment.
+See [the checkpoint-3 plan report](m3-plan.md) for counts, costs and limitations.
 
 ## 11. Reviewer decisions and remaining deployment inputs
 

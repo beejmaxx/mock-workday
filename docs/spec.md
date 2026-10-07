@@ -420,6 +420,13 @@ unbound delegation is flagged without inventing an ASU. Successful issuance and
 identity administration require append-only identity audit or fail closed.
 Existing historical fixture rows may have null new attribution fields.
 
+**[Lab policy, checkpoint 3]** Transport Host aliases include
+`{known_slug}.mockworkday.internal` and, when configured by `MW_PUBLIC_DOMAIN`,
+`{known_slug}.{public_domain}`. Unknown tenants still fail closed. Canonical token
+issuer/API/assertion audience strings remain the `.mockworkday.local` values;
+TLS verification and DNS configuration are separate transport requirements.
+See [the provider infrastructure plan](m3-plan.md). This adds no tenant or token authority.
+
 Application API requests emit structured JSON to stdout, including
 `request_id` (the propagated `X-Request-Id`), tenant, method, route template,
 status, duration and available actor identifiers. Unknown/preroute failures use
@@ -1581,6 +1588,8 @@ cross-domain filtering, DLQ policies/KMS/alarms remain checkpoint-3/4 proofs.
 | T-M3-AI-03 | Concurrent and daily limits; actual settlement; 429; midnight and lease recovery; timeout/crash charged; audit failure before/after dispatch; predispatch refund; no double settlement |
 | T-M3-AI-04 | Mid-call identity/grant/object revocation discards answer but charges usage; append-only attribution audit; no prompt/answer/credentials in logs |
 | T-M3-AI-05 | Deterministic fake and no AWS in tests; stubbed exact Converse profile/config; approved live smoke later verifies IAM/regions/model access without fallback |
+| T-M3-N-01 / T-M3-DNS-01 | Private/public transport aliases preserve canonical token identity; unknown/cross-tenant hosts fail; live DNS/CA/endpoint proofs follow at checkpoint 4 |
+| T-M3-DOWN-01 | M3 owned-resource inventory, explicit pending key-deletion dates and failure on unreadable inventories; live teardown follows at checkpoint 4 |
 | T-M3-M-01 | Valid EMF JSON, units, wall time, exact dimensions and 20 baseline series; deployment plan later proves dashboard/alarms/retention and metric-history leftovers |
 
 

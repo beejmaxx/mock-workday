@@ -77,6 +77,9 @@ def main():
     for region in ("us-east-2", "us-east-1"):
         for item in aws("logs", "describe-log-groups", region=region)["logGroups"]:
             record(f"log group {region}", item["logGroupName"])
+    from m3_leftovers import inventory
+
+    inventory(record)
     tagged = aws(
         "resourcegroupstaggingapi",
         "get-resources",
@@ -101,7 +104,7 @@ def main():
             f"{len(remaining)} resource(s) remain; review the inventory (other projects may be included)."
         )
     print(
-        "No disposable/billable leftovers found. Platform state, network, SSM and registry are intentionally retained."
+        "No disposable/billable leftovers found. Pending KMS deletions, if any, remain inventoried above. Platform state, network, SSM and registry are intentionally retained."
     )
 
 

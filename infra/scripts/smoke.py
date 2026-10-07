@@ -10,11 +10,16 @@ NAMESPACE = UUID("b2dbf256-9eed-4f28-874b-afbd58c9e3d2")
 
 
 def main():
-    base = deployment()["url"]
+    config = deployment()
+    base = config["url"]
     http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def call(path, expected, *, token=None, data=None, method=None, form=False):
-        headers = {"Host": "acme.mockworkday.local"}
+        headers = {
+            "Host": "acme." + config["public_domain"]
+            if config.get("public_domain")
+            else "acme.mockworkday.local"
+        }
         if token:
             headers["Authorization"] = "Bearer " + token
         if data is not None:

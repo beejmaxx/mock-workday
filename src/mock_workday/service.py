@@ -149,8 +149,11 @@ class Service:
 
     def tenant(self, request):
         host = request.headers.get("host", "").split(":", 1)[0].lower()
-        suffix = ".mockworkday.local"
-        slug = host[: -len(suffix)] if host.endswith(suffix) else ""
+        suffixes = [".mockworkday.local", ".mockworkday.internal"]
+        public_domain = os.getenv("MW_PUBLIC_DOMAIN", "").strip().lower()
+        if public_domain:
+            suffixes.append("." + public_domain)
+        slug = next((host[: -len(s)] for s in suffixes if host.endswith(s)), "")
         with self.db.app.connect() as conn:
             tenant = one(conn, "SELECT * FROM tenants WHERE slug=:slug", slug=slug)
         if not tenant or not tenant["enabled"]:

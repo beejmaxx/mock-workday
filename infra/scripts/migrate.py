@@ -4,6 +4,12 @@ import json
 
 def main():
     config = deployment()
+    refs = json.dumps(config["asu_references"])
+    code = (
+        'from mock_workday.bootstrap import bootstrap; from mock_workday.bulk_seed import load; from mock_workday.db import Database; from mock_workday.config import APP_URL,OWNER_URL; from mock_workday.identity import seed_registrations; import json; bootstrap(); db=Database(APP_URL,OWNER_URL); [load(db,s) for s in ("northstar","meridian","cedar")]; seed_registrations(db,json.loads('
+        + repr(refs)
+        + ")); db.close()"
+    )
     result = aws(
         "ecs",
         "run-task",
@@ -11,6 +17,17 @@ def main():
         config["cluster"],
         "--task-definition",
         config["migration_task_definition"],
+        "--overrides",
+        json.dumps(
+            {
+                "containerOverrides": [
+                    {
+                        "name": "mock-workday",
+                        "command": [".venv/bin/python", "-c", code],
+                    }
+                ]
+            }
+        ),
         "--launch-type",
         "FARGATE",
         "--platform-version",

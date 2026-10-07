@@ -431,3 +431,24 @@ uses the task role and the approved Nova Micro US profile; enable it only during
 approved AWS deployment. IAM, dashboard/alarms, log retention and live model
 access verification remain checkpoint-3/4 work. No AWS resources were created
 for slice 2d.
+
+
+### M3 infrastructure (checkpoint 3)
+
+[Plan report and cost check](docs/m3-plan.md) describe the provider-only plan,
+conditional consumer resources and TLS enrollment. The service baseline is about
+$0.129331/hour before usage with consumer inputs unset; the §8 full configuration
+including a one-AZ consumer endpoint is about $0.139742/hour.
+
+Optional `.local/aws-dev.tfvars.json` keys are `public_domain` (default null),
+`allowed_principal` (account-root ARN only), `consumer_vpc_id`,
+`consumer_endpoint_id`, `consumer_endpoint_dns`, `target_event_bus_arn`, and
+`event_tenant_slugs` (explicit allowlist when a target is supplied). The plan
+wrapper preserves these keys. Do not put credentials, private keys or bodies
+in tfvars. The imported `private_certificate_arn` is supplied by owner enrollment
+at approved deployment; null means the private TLS listener is not active.
+Runtime endpoint/VPC association and receiver bus/queue remain consumer-owned.
+
+Checkpoint 3 ran no deployment or cleanup commands. The updated `aws-up` and
+`aws-down` paths are for checkpoint 4 only, after plan approval. Recheck the
+operator /32, image tag and certificate plan before applying.

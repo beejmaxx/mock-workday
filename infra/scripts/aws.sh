@@ -28,8 +28,13 @@ import ipaddress, json, sys
 network = ipaddress.ip_network(sys.argv[2])
 if network.version != 4 or network.prefixlen != 32:
     raise SystemExit('Only a single IPv4 /32 is allowed')
-with open(sys.argv[1], 'w') as output:
-    json.dump({'allowed_cidr': str(network), 'image_tag': sys.argv[3]}, output)
+from pathlib import Path
+path = Path(sys.argv[1])
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings.update(allowed_cidr=str(network), image_tag=sys.argv[3])
+settings.setdefault('public_domain', None)
+with path.open('w') as output:
+    json.dump(settings, output)
 PY
 }
 
@@ -39,12 +44,17 @@ initialize() {
 
 case "${1:-}" in
   plan)
+    umask 077
     check_account
     configure
     initialize "$REGISTRY"
-    terraform -chdir="$REGISTRY" plan
+    terraform -chdir="$REGISTRY" fmt -check
+    terraform -chdir="$REGISTRY" validate
+    terraform -chdir="$REGISTRY" plan -out="$ROOT/.local/m3-registry.tfplan"
     initialize "$SERVICE"
-    terraform -chdir="$SERVICE" plan -var-file="$VARS"
+    terraform -chdir="$SERVICE" fmt -check
+    terraform -chdir="$SERVICE" validate
+    terraform -chdir="$SERVICE" plan -var-file="$VARS" -out="$ROOT/.local/m3-service.tfplan"
     ;;
   up)
     check_account
@@ -58,7 +68,9 @@ case "${1:-}" in
     docker build --platform linux/arm64 -t "$repository:$tag" "$ROOT" </dev/null
     docker push "$repository:$tag" </dev/null
     initialize "$SERVICE"
+    uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" enroll
     terraform -chdir="$SERVICE" apply -var-file="$VARS"
+    uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" store
     python3 "$ROOT/infra/scripts/migrate.py"
     ;;
   smoke)
@@ -69,7 +81,9 @@ case "${1:-}" in
     check_account
     [[ -f "$VARS" ]] || configure
     initialize "$SERVICE"
+    python3 "$ROOT/infra/scripts/prepare_down.py"
     terraform -chdir="$SERVICE" destroy -var-file="$VARS"
+    uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" cleanup
     python3 "$ROOT/infra/scripts/leftovers.py"
     ;;
   leftovers)

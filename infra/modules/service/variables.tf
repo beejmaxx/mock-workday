@@ -12,16 +12,34 @@ terraform {
   }
 }
 
-variable "vpc_id" { type = string }
-variable "public_subnet_ids" { type = list(string) }
-variable "private_subnet_ids" { type = list(string) }
-variable "allowed_cidr" { type = string }
-variable "image_tag" { type = string }
+variable "vpc_id" {
+  type = string
+}
+variable "public_subnet_ids" {
+  type = list(string)
+}
+variable "private_subnet_ids" {
+  type = list(string)
+}
+variable "allowed_cidr" {
+  type = string
+}
+variable "image_tag" {
+  type = string
+}
 
-variable "name" { type = string }
-variable "region" { type = string }
-variable "account_id" { type = string }
-variable "repository_name" { type = string }
+variable "name" {
+  type = string
+}
+variable "region" {
+  type = string
+}
+variable "account_id" {
+  type = string
+}
+variable "repository_name" {
+  type = string
+}
 variable "image_digest" {
   type    = string
   default = null
