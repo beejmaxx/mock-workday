@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Request
 
 from ..auth import issue_token, jwks
+from ..errors import request_id
 from .models import Token, TokenInput
 
 router = APIRouter()
@@ -12,8 +13,17 @@ router = APIRouter()
 def token(request: Request, form: Annotated[TokenInput, Form()]):
     service = request.app.state.service
     tenant = service.tenant(request)
+    request.state.identity_context = {}
     with service.db.tenant_tx(tenant["id"]) as conn:
-        return issue_token(conn, tenant, form, service.clock.now())
+        return issue_token(
+            conn,
+            tenant,
+            form,
+            service.clock.now(),
+            service.storage,
+            request_id(request),
+            request.state.identity_context,
+        )
 
 
 @router.get("/.well-known/jwks.json")

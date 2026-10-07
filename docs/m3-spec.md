@@ -268,6 +268,8 @@ storage functions with an explicit AWS/local branch, no provider registry.
 Tests generate credentials; seeded registration IDs are deterministic but keys
 and secrets are not. No public endpoint returns stored secret material.
 
+**[Lab policy — slice 2b implementation, owner-enrollment split approved]** `MW_CREDENTIAL_STORE` is `aws` or a local mode-0600 file path. An owner-only `python -m mock_workday.credentials` command writes versions; its exclusive mode-0600 output delivers the delegate secret once. The isolated admin API activates `existing_version` in AWS; it never writes AWS secrets. Version identifiers use UUID hex strings. Local revocation removes material after the audited database commit; AWS obsolete versions require owner cleanup. Explicit `python -m mock_workday.identity` seeds disabled registrations/ASUs separately from the stable fixtures; AWS requires a `--references` JSON map of tenant slug to mode to provisioned secret ARN. See main spec §3.6 and README for the implemented contract.
+
 ### 3.2 Rotation and revocation
 
 **[Lab policy]** Stable ASU/client IDs survive rotation. Permit at most two
@@ -1248,6 +1250,8 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D39 — Scope: No CloudFront/X-Ray/Macie/CloudHSM, multi-AZ RDS, autoscaling, SNS or internal queues beyond target DLQs | Add production infrastructure wholesale | Each excluded service either lacks a current need, violates the plan/stack constraints, or is unavailable; production resemblance does not justify unused machinery |
 | D40 — Integration: Versioned HTTP plus explicit event/export exceptions, no shared DB/code | Import runtime internals or share persistence | Keeps independent ownership and testable contracts despite broader enterprise-service functionality |
 | D41 — K: 200-by-200 synthetic name pools, family/level architecture and industry-specific prose before first bulk load | Numeric name suffixes, unrelated role rotation and repeated filler | Makes core-service examples believable without new schema fields, real personal data or a compensation engine; preserve counts/IDs and recompute content hashes |
+
+| D42 — H: Owner CLI prepares immutable credential versions; isolated admin API activates references | Grant Secrets Manager writes to the service | Preserves the specified read-only tenant verification role and keeps enrollment material out of Terraform/state; local test-admin can generate synthetic credentials directly |
 
 ## 11. Reviewer decisions and remaining deployment inputs
 

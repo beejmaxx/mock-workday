@@ -29,6 +29,14 @@ def create(request: Request, body: GrantInput):
             "SELECT * FROM api_clients WHERE tenant_id=:tid AND client_id=:id AND NOT disabled",
             id=body.client_id,
         )
+        if client and client["asu_id"]:
+            asu = one(
+                ctx.conn,
+                "SELECT mode FROM agent_system_users WHERE tenant_id=:tid AND id=:id",
+                id=client["asu_id"],
+            )
+            if asu["mode"] != "DELEGATE":
+                raise APIError(422, "VALIDATION_ERROR")
         if not client or not set(body.scopes) <= set(client["scope_ceiling"]):
             raise APIError(422, "VALIDATION_ERROR")
         grant = one(

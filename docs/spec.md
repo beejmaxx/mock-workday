@@ -133,9 +133,9 @@ compensation_revisions(id, tenant_id, worker_id, annual_salary numeric(12,2),
               currency char(3), effective_date, recorded_seq, recorded_at,
               bp_event_id null)
 
-accounts(id, tenant_id, username, kind HUMAN|ISU, worker_id null,
+accounts(id, tenant_id, username, kind HUMAN|ISU|ASU, worker_id null,
          password_hash, disabled bool, ui_sessions_allowed bool)
-    -- HUMAN requires worker_id; ISU requires worker_id null and ui_sessions_allowed=false
+    -- HUMAN requires worker_id; ISU/ASU require worker_id null and ui_sessions_allowed=false
 
 role_assignments(id, tenant_id, role MANAGER|HR_PARTNER|COMPENSATION_PARTNER,
                  org_id, position_id, assigned_at, revoked_at null)
@@ -153,7 +153,8 @@ integration_group_orgs(group_id, org_id, tenant_id)
 domain_grants(tenant_id, domain, group_id, permission VIEW|MODIFY)
 
 api_clients(id, tenant_id, client_id text, secret_hash, name,
-            scope_ceiling text[], isu_account_id null, disabled bool)
+            scope_ceiling text[], isu_account_id null, disabled bool,
+            asu_id null, allowed_operations text[])
 delegation_grants(id, tenant_id, user_account_id, client_id, scopes text[],
                   created_at, expires_at, revoked_at null)
 
@@ -170,6 +171,18 @@ time_off_balances(id, tenant_id, worker_id, plan VACATION, as_of date,
     -- unique tenant/worker/plan/as_of; owner-only writes; FORCE RLS
 seed_loads(tenant_id pk, version, checksum, complete bool default false)
     -- owner-only, FORCE RLS; partial bulk tenants are not routable
+
+-- M3 slice 2b (Lab policy; constraints and custody in §3.6)
+agent_registrations(id, tenant_id, ref_id, display_name, enabled, created_at)
+agent_system_users(id, tenant_id, registration_id, account_id, client_id,
+                   mode DELEGATE|AMBIENT, enabled, credential_store_ref)
+credential_versions(id, tenant_id, asu_id, store_version, fingerprint null,
+                    active_from, accept_until null, revoked_at null,
+                    certificate_expires_at null)
+assertion_uses(tenant_id, client_id, jti, expires_at)
+audit_identity(id, tenant_id, request_id, action, operator null,
+               by_user_account_id null, on_behalf_of_user_account_id null,
+               agent_id null, asu_id null, credential_version_id null, at)
 
 -- M2
 bp_events(id, tenant_id, type CHANGE_JOB|REQUEST_TIME_OFF, subject_worker_id,
@@ -295,6 +308,108 @@ class Principal:
 | `documents` | all document domains |
 
 ---
+
+### 3.6 M3 ASU identity and credentials [Lab policy unless stated]
+
+This section amends §2–4 and the legacy-only token rules above. The published
+Workday identity model and primary sources are distinguished from this lab's
+protocol choices in [M3 §2–3](m3-spec.md#2-agent-identities-and-the-existing-grant-a). The implementation
+uses per-tenant registrations, at most one DELEGATE and one AMBIENT ASU per
+registration, and one OAuth client per ASU. Registration and ASU start disabled.
+ASU accounts have no worker, password login, or UI session. Existing HUMAN/ISU
+clients and grants retain their meanings; bound ASU clients cannot use legacy
+secret-only authentication as a fallback.
+
+New FORCE-RLS tables are `agent_registrations`, `agent_system_users`,
+`credential_versions`, `assertion_uses`, and append-only `audit_identity`.
+Composite tenant foreign keys bind accounts, registrations, clients, versions
+and audit attribution. App access to identity configuration is SELECT-only;
+the owner performs audited administration. The app may insert issuance audit
+and atomically consume assertion JTIs (and delete expired replay entries).
+`api_clients` gains `asu_id` and `allowed_operations`; an empty operation list
+denies all business API calls. Operation identifiers are the fixed existing
+OpenAPI operationIds listed in `identity.OPERATIONS`, not arbitrary paths.
+
+`POST /oauth2/token` adds these ASU forms (form-encoded input):
+
+| Mode | Required input | Result |
+|---|---|---|
+| AMBIENT | `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`, `client_id`, `assertion` | `typ=ambient`, `sub=ASU account`, current integration-group authority |
+| DELEGATE | Existing token-exchange grant type, `client_id`, `client_secret`, `credential_version_id`, `grant_id` | `typ=delegated`, `sub=human`, `act.client_id`, `act.sub=ASU account` |
+
+Delegate renewal needs no fresh human subject token. Human presence is proven
+once when creating the existing delegation grant; that grant remains the sole
+consent/revocation record. Each call rechecks the current human account, grant,
+client, registration, ASU and credential. Authority is the intersection of the
+human's current authority, grant, client ceiling, issued scopes and current and
+issued operation lists. Optional space-delimited `scope` can only narrow.
+Ambient authority uses integration groups and denies every BP mutation and grant
+creation. These ceilings are checked before idempotent receipt replay.
+
+Ambient assertions require RS256 and the registered RSA (minimum 2048 bits)
+X.509 public key, currently valid certificate, `kid=credential version UUID`,
+`iss=client_id`, `sub=ASU username`, and exact canonical
+`aud=https://{slug}.mockworkday.local/oauth2/token`. Host aliases do not change
+this audience. Integer `iat`/`exp`, nonempty `jti` (maximum 128 characters),
+`exp>now`, lifetime at most 60 seconds, and at most 5 seconds future `iat` are
+required. `(tenant, client, jti)` is consumed atomically in the issuance
+transaction, so a concurrent replay fails. Optional `nbf` must be satisfied.
+Tokens carry agent/ASU/credential IDs and operation ceilings. Lifetime is at
+most 300 seconds, capped by grant, credential acceptance and certificate expiry.
+
+`MW_CREDENTIAL_STORE` is a private local JSON file path (default
+`/tmp/mock-workday-credentials/credentials.json`) or `aws`. Local reads require
+mode 0600 and current process ownership, reject symlinks, and updates use a
+locked atomic replacement. AWS reads use the tenant-tagged cached STS session,
+Secrets Manager reference and exact immutable version ID. Payloads bind tenant,
+ASU and mode; the registry holds references/status only. The ambient private
+key stays with the external signer. Delegate enrollment returns a random secret
+once; only its scrypt verifier is stored. Missing/unavailable material fails
+closed with 503; database status is rechecked on every call, with no positive
+authorization cache.
+
+Rotation accepts at most two current versions. Store the new material first,
+then atomically activate its reference, audit, and cap the old version at
+`now+300s`. Failed activation leaves the old version unchanged and may leave an
+inert secret version for owner cleanup. Global public-key fingerprint uniqueness
+rejects key reuse. Emergency revocation commits status/audit immediately and
+invalidates already-issued tokens; local material is then removed best effort.
+AWS obsolete versions await owner cleanup (staging labels never authorize).
+
+Identity administration is available only on the existing isolated test-admin
+listener when `MW_TEST_ADMIN=1`; never expose it through the public ALB. Its
+[separate OpenAPI contract](admin-openapi.json) covers registration, enablement,
+mode/client configuration, credential enrollment/activation and revocation.
+Local enrollment generates delegate secrets. In AWS, the owner-only
+`python -m mock_workday.credentials` command writes a prepared version and an
+exclusive mode-0600 result file; the admin API activates `existing_version`.
+The service's AWS role stays read-only for secrets. Terraform creates containers
+and policies later, with no secret values in state.
+
+`python -m mock_workday.identity` explicitly adds one deterministic disabled
+registration and two disabled ASUs per existing tenant, without any credential.
+It is idempotent and separate from the unchanged small/bulk fixtures. AWS mode
+requires `--references` with a tenant-slug → mode → provisioned secret ARN map.
+Fresh disposable schema installation is required; this is not an in-place
+migration for a populated deployment.
+
+Authorization/object audits and BP history gain `by_user_account_id`,
+`on_behalf_of_user_account_id`, `agent_id`, `asu_id`,
+`credential_version_id`, and `legacy_delegated`. For ASU delegation, By User is
+the ASU and On Behalf Of is the human; ambient uses only By User. Legacy
+unbound delegation is flagged without inventing an ASU. Successful issuance and
+identity administration require append-only identity audit or fail closed.
+Existing historical fixture rows may have null new attribution fields.
+
+Application API requests emit structured JSON to stdout, including
+`request_id` (the propagated `X-Request-Id`), tenant, method, route template,
+status, duration and available actor identifiers. Unknown/preroute failures use
+null route/duration where unavailable. Do not log raw paths, query strings,
+headers, bodies, assertions, secrets or compensation. Unexpected handler errors
+are sanitized to 503. Uvicorn access logging is disabled. Built-in documentation
+and health-check OpenAPI responses are not business request audit records.
+CloudWatch collection, operational KMS encryption and explicit **3-day** log
+retention are checkpoint-3/4 infrastructure work, not a local-test assertion.
 
 ## 4. Authorization
 
@@ -1150,6 +1265,23 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 T-M3-S-03 and T-M3-ABAC-01 are reserved for checkpoint-4 live policy proofs;
 report session-expiry caps belong to slice 2c. No local stub test claims AWS
 policy enforcement.
+
+### M3 slice 2b: identity, credentials, attribution and logs
+
+| ID | Acceptance |
+|---|---|
+| T-M3-ID-01 | Tenant registration uniqueness; maximum one ASU per mode/two total; one client each; disabled default; RLS and privileges |
+| T-M3-ID-02 | Ambient JWT success, exact issuer/subject/audience; certificate pin/validity; wrong tenant/client/mode/algorithm/key fails |
+| T-M3-ID-03 | Assertion expiry/future time/60-second limit, concurrent JTI replay, token TTL caps |
+| T-M3-ID-04 | OBO renewal without human token; client/credential/grant required; wrong tenant/client, expired/revoked grant and disabled human rejected; current human authority rechecked |
+| T-M3-ID-05 | Current scope and operation intersection; human action allowed but delegate denied; ambient domain reach and BP denial |
+| T-M3-ID-06 | Legacy token/grant compatibility; no ASU fallback to legacy exchange or ISU credentials |
+| T-M3-CR-01 | Two-version overlap boundary, rotation failure, duplicate-key rejection, emergency revocation and old-token rejection |
+| T-M3-CR-02 | Disable registration/ASU/client, secret outage, inactive secret version; no secret material in registry/responses/logs |
+| T-M3-A-01 | By User/OBO attribution across modes, sensitive reads/BP actions/idempotent replay, legacy attribution, issuance/config audit failure |
+| T-M3-A-02 | Structured JSON request IDs and redaction, 3-day CloudWatch retention/encryption in plan and live checks |
+
+CloudWatch retention/encryption and live IAM enforcement remain checkpoint-3/4 checks.
 
 ## 12. Reproducible, disposable environments [Lab requirement]
 

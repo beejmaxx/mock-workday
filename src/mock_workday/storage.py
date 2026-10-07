@@ -37,6 +37,8 @@ class Storage:
                 raise ValueError("Tenant storage requires bucket and kms_key_id")
         self.locks = {tid: Lock() for tid in self.mapping}
         self.sessions = {}
+        self.aws_sessions = {}
+        self.secret_clients = {}
         self.sts = None
         self.sts_lock = Lock()
 
@@ -66,13 +68,27 @@ class Storage:
                 DurationSeconds=900,
                 Tags=[{"Key": "tenant", "Value": tid}],
             )["Credentials"]
-            client = boto3.session.Session(
+            session = boto3.session.Session(
                 aws_access_key_id=credentials["AccessKeyId"],
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
-            ).client("s3", config=SDK_CONFIG)
+            )
+            client = session.client("s3", config=SDK_CONFIG)
+            self.aws_sessions[key] = session
+            self.secret_clients.pop(key, None)
             self.sessions[key] = (credentials["Expiration"], client)
             return client
+
+    def secret_client(self, tenant):
+        self.client(tenant)
+        tid = str(tenant["id"])
+        key = (self.role_arn, tid)
+        with self.locks[tid]:
+            if key not in self.secret_clients:
+                self.secret_clients[key] = self.aws_sessions[key].client(
+                    "secretsmanager", config=SDK_CONFIG
+                )
+            return self.secret_clients[key]
 
     def location(self, tenant, document_id):
         tid = str(tenant["id"])

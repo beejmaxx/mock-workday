@@ -81,14 +81,14 @@ CREATE TABLE accounts (
     id uuid PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES tenants,
     username text NOT NULL,
-    kind text NOT NULL CHECK (kind IN ('HUMAN','ISU')),
+    kind text NOT NULL CHECK (kind IN ('HUMAN','ISU','ASU')),
     worker_id uuid,
     password_hash text NOT NULL,
     disabled boolean NOT NULL DEFAULT false,
     ui_sessions_allowed boolean NOT NULL,
     UNIQUE (tenant_id, username),
     FOREIGN KEY (tenant_id, worker_id) REFERENCES workers (tenant_id, id),
-    CHECK ((kind = 'HUMAN' AND worker_id IS NOT NULL) OR (kind = 'ISU' AND worker_id IS NULL AND NOT ui_sessions_allowed)),
+    CHECK ((kind = 'HUMAN' AND worker_id IS NOT NULL) OR (kind IN ('ISU','ASU') AND worker_id IS NULL AND NOT ui_sessions_allowed)),
     UNIQUE (tenant_id, id)
 );
 
@@ -487,3 +487,114 @@ ALTER TABLE seed_loads FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON seed_loads
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+
+CREATE TABLE agent_registrations (
+    id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants,
+    ref_id text NOT NULL, display_name text NOT NULL,
+    enabled boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL,
+    UNIQUE (tenant_id, ref_id), UNIQUE (tenant_id, id)
+);
+CREATE TABLE agent_system_users (
+    id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants,
+    registration_id uuid NOT NULL, account_id uuid NOT NULL, client_id text NOT NULL,
+    mode text NOT NULL CHECK (mode IN ('DELEGATE','AMBIENT')),
+    enabled boolean NOT NULL DEFAULT false, credential_store_ref text NOT NULL UNIQUE,
+    UNIQUE (tenant_id, id), UNIQUE (tenant_id, registration_id, mode),
+    UNIQUE (tenant_id, account_id), UNIQUE (tenant_id, client_id),
+    FOREIGN KEY (tenant_id, registration_id) REFERENCES agent_registrations(tenant_id,id),
+    FOREIGN KEY (tenant_id, account_id) REFERENCES accounts(tenant_id,id),
+    FOREIGN KEY (tenant_id, client_id) REFERENCES api_clients(tenant_id,client_id)
+);
+ALTER TABLE api_clients ADD asu_id uuid;
+ALTER TABLE api_clients ADD allowed_operations text[] NOT NULL DEFAULT '{}';
+ALTER TABLE api_clients ADD UNIQUE (tenant_id, asu_id);
+ALTER TABLE api_clients ADD FOREIGN KEY (tenant_id, asu_id) REFERENCES agent_system_users(tenant_id,id);
+CREATE TABLE credential_versions (
+    id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants, asu_id uuid NOT NULL,
+    store_version text NOT NULL, fingerprint text UNIQUE,
+    active_from timestamptz NOT NULL, accept_until timestamptz, revoked_at timestamptz,
+    certificate_expires_at timestamptz,
+    UNIQUE (tenant_id,id), UNIQUE (tenant_id,asu_id,store_version),
+    FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id)
+);
+CREATE TABLE assertion_uses (
+    tenant_id uuid NOT NULL REFERENCES tenants, client_id text NOT NULL,
+    jti text NOT NULL, expires_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id,client_id,jti),
+    FOREIGN KEY (tenant_id,client_id) REFERENCES api_clients(tenant_id,client_id)
+);
+CREATE TABLE audit_identity (
+    id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants,
+    request_id text NOT NULL, action text NOT NULL, operator text,
+    by_user_account_id uuid, on_behalf_of_user_account_id uuid,
+    agent_id uuid, asu_id uuid, credential_version_id uuid,
+    at timestamptz NOT NULL
+);
+ALTER TABLE agent_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_registrations FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON agent_registrations
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT ON agent_registrations TO mw_app;
+ALTER TABLE agent_system_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_system_users FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON agent_system_users
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT ON agent_system_users TO mw_app;
+ALTER TABLE credential_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credential_versions FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON credential_versions
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT ON credential_versions TO mw_app;
+ALTER TABLE assertion_uses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assertion_uses FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON assertion_uses
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT, DELETE ON assertion_uses TO mw_app;
+ALTER TABLE audit_identity ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_identity FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON audit_identity
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON audit_identity TO mw_app;
+ALTER TABLE audit_authz ADD by_user_account_id uuid;
+ALTER TABLE audit_authz ADD on_behalf_of_user_account_id uuid;
+ALTER TABLE audit_authz ADD agent_id uuid;
+ALTER TABLE audit_authz ADD asu_id uuid;
+ALTER TABLE audit_authz ADD credential_version_id uuid;
+ALTER TABLE audit_authz ADD legacy_delegated boolean NOT NULL DEFAULT false;
+ALTER TABLE audit_objects ADD by_user_account_id uuid;
+ALTER TABLE audit_objects ADD on_behalf_of_user_account_id uuid;
+ALTER TABLE audit_objects ADD agent_id uuid;
+ALTER TABLE audit_objects ADD asu_id uuid;
+ALTER TABLE audit_objects ADD credential_version_id uuid;
+ALTER TABLE audit_objects ADD legacy_delegated boolean NOT NULL DEFAULT false;
+ALTER TABLE bp_history ADD by_user_account_id uuid;
+ALTER TABLE bp_history ADD on_behalf_of_user_account_id uuid;
+ALTER TABLE bp_history ADD agent_id uuid;
+ALTER TABLE bp_history ADD asu_id uuid;
+ALTER TABLE bp_history ADD credential_version_id uuid;
+ALTER TABLE bp_history ADD legacy_delegated boolean NOT NULL DEFAULT false;
+ALTER TABLE audit_identity ADD FOREIGN KEY (tenant_id,by_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_identity ADD FOREIGN KEY (tenant_id,on_behalf_of_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_identity ADD FOREIGN KEY (tenant_id,agent_id) REFERENCES agent_registrations(tenant_id,id);
+ALTER TABLE audit_identity ADD FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id);
+ALTER TABLE audit_identity ADD FOREIGN KEY (tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id);
+ALTER TABLE audit_authz ADD FOREIGN KEY (tenant_id,by_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_authz ADD FOREIGN KEY (tenant_id,on_behalf_of_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_authz ADD FOREIGN KEY (tenant_id,agent_id) REFERENCES agent_registrations(tenant_id,id);
+ALTER TABLE audit_authz ADD FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id);
+ALTER TABLE audit_authz ADD FOREIGN KEY (tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id);
+ALTER TABLE audit_objects ADD FOREIGN KEY (tenant_id,by_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_objects ADD FOREIGN KEY (tenant_id,on_behalf_of_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE audit_objects ADD FOREIGN KEY (tenant_id,agent_id) REFERENCES agent_registrations(tenant_id,id);
+ALTER TABLE audit_objects ADD FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id);
+ALTER TABLE audit_objects ADD FOREIGN KEY (tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id);
+ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,by_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,on_behalf_of_user_account_id) REFERENCES accounts(tenant_id,id);
+ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,agent_id) REFERENCES agent_registrations(tenant_id,id);
+ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id);
+ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id);

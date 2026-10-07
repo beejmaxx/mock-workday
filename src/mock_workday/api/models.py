@@ -86,6 +86,9 @@ class TokenInput(BaseModel):
     client_id: str | None = None
     client_secret: str | None = None
     grant_id: str | None = None
+    credential_version_id: str | None = None
+    assertion: str | None = Field(default=None, max_length=16384)
+    scope: str | None = None
 
 
 class Token(BaseModel):

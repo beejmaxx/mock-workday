@@ -296,3 +296,50 @@ Run cleanup before deleting the tenant registry record; stack teardown handles
 buckets left by a full database reset. Manifests/inventories contain synthetic
 IDs, sizes and hashes, never credentials. Cloud-side integration and teardown
 proofs remain deferred until the approved deployment checkpoint.
+
+### M3 slice 2b: ASU identities and credentials
+
+[Identity contract](docs/spec.md#36-m3-asu-identity-and-credentials-lab-policy-unless-stated)
+and [isolated admin OpenAPI](docs/admin-openapi.json) describe the new endpoints.
+Recreate the disposable database for the expanded schema. Existing small seeds
+and legacy HUMAN/ISU clients remain unchanged. After seeding tenants, explicitly
+run `uv run python -m mock_workday.identity` to add disabled synthetic
+registrations and two ASUs each; this command creates no usable credentials.
+
+Set `MW_CREDENTIAL_STORE` to a private local JSON file path (default
+`/tmp/mock-workday-credentials/credentials.json`) or `aws`. The file is mode 0600;
+keep it outside the checkout and remove it when tearing down the local lab.
+The isolated port-8081 admin API can enroll local credentials. Enable both the
+registration and mode explicitly; configure scopes and operationIds narrowly.
+Delegate enrollment returns a synthetic secret once. A human creates the grant,
+then the delegate exchanges its client secret, credential version and grant ID
+without another human token. Ambient enrollment accepts only the public X.509
+certificate; its private signing key never belongs in Mock Workday.
+
+For AWS, after checkpoint-4 approval and secret-container provisioning, use
+`MW_CREDENTIAL_STORE=aws uv run python -m mock_workday.identity --references /private/asu-references.json`
+with a JSON object mapping each existing tenant slug to `DELEGATE` and `AMBIENT`
+secret ARNs. Run credential preparation under the owner/bootstrap IAM role:
+
+```sh
+MW_CREDENTIAL_STORE=aws uv run python -m mock_workday.credentials \
+  --tenant TENANT_UUID --asu ASU_UUID --mode DELEGATE \
+  --reference SECRET_ARN --output /private/new-credential.json
+```
+
+For ambient mode add `--certificate /private/public-certificate.pem`. The output
+file must not exist; it is created mode 0600 and contains the version ID plus
+only the newly generated delegate secret, when applicable. Deliver that secret
+over an authorized encrypted operator channel. Through the isolated admin API,
+activate the ID using `existing_version`. Set the controllable service clock to
+current UTC before live certificate enrollment. Do not send enrollment secrets
+through D1's public HTTP ALB. A lost one-time result requires rotation.
+
+The app reads exact secret versions using tenant-tagged sessions; it cannot
+write AWS secret values. Database status controls acceptance, not Secrets
+Manager staging labels. A failed activation can leave an inert version for
+owner cleanup. Emergency revocation invalidates existing tokens immediately;
+AWS old secret material awaits owner cleanup, while local removal is attempted
+after commit. Credential hashes, keys and tokens never enter registry rows or
+request logs. Structured JSON request logs carry `X-Request-Id`; the 3-day
+CloudWatch retention/encryption and live IAM proofs belong to checkpoints 3–4.

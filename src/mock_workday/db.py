@@ -41,6 +41,12 @@ class Database:
 
     def install(self):
         with self.owner.begin() as conn:
+            # New foreign keys can validate references after FORCE RLS is installed.
+            run(
+                conn,
+                "SELECT set_config('app.tenant_id', :tid, true)",
+                tid="00000000-0000-0000-0000-000000000000",
+            )
             conn.exec_driver_sql(Path(__file__).with_name("schema.sql").read_text())
 
     def close(self):

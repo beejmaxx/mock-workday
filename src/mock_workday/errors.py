@@ -18,7 +18,12 @@ def request_id(request):
 
 
 def error_response(request, exc):
+    from .request_logs import early_failure
+
+    early_failure(request, exc.status, exc.code)
     rid = request_id(request)
+    request.state.response_status = exc.status
+    request.state.error_code = exc.code
     return JSONResponse(
         {"error": {"code": exc.code, "message": exc.message, "request_id": rid}},
         status_code=exc.status,

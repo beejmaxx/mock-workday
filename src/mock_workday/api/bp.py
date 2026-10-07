@@ -34,6 +34,7 @@ IDEMPOTENCY_HEADER = {
 
 def operation_response(ctx, request, operation, status):
     result, code, headers = perform(ctx, request, operation, status)
+    request.state.response_status = code
     return JSONResponse(
         jsonable_encoder(result),
         status_code=code,

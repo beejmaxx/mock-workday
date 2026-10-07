@@ -9,9 +9,9 @@ from .authz import Decision, Target, authorize
 from .clock import Clock
 from .db import one
 from .errors import APIError, request_id
+from .faults import Faults, start_faults, timeout
 from .ratelimit import RateLimits
 from .storage import Storage
-from .faults import Faults, start_faults, timeout
 
 
 @dataclass
@@ -140,6 +140,7 @@ class Service:
             tenant = one(conn, "SELECT * FROM tenants WHERE slug=:slug", slug=slug)
         if not tenant or not tenant["enabled"]:
             raise APIError(404, "TENANT_NOT_FOUND")
+        request.state.tenant_id = tenant["id"]
         return tenant
 
     @contextmanager
@@ -151,8 +152,37 @@ class Service:
         try:
             with self.db.tenant_tx(tenant["id"]) as conn:
                 p = authenticate(
-                    conn, tenant, request.headers.get("authorization", ""), now
+                    conn,
+                    tenant,
+                    request.headers.get("authorization", ""),
+                    now,
+                    self.storage,
                 )
+                request.state.principal = p
+                request.state.tenant_id = tenant["id"]
+                if p.asu_id and (
+                    request.scope["route"].unique_id not in p.operations
+                    or (
+                        p.kind == "ambient"
+                        and request.method != "GET"
+                        and "business-process" in request.url.path
+                    )
+                ):
+                    version = one(
+                        conn,
+                        "SELECT policy_version FROM tenant_config WHERE tenant_id=:tid",
+                    )["policy_version"]
+                    audit.denial(
+                        self.db,
+                        p,
+                        request_id(request),
+                        "WRITE" if request.method != "GET" else "READ",
+                        None,
+                        Target("operation", None),
+                        Decision(False, "OPERATION_CEILING", None, None, version, None),
+                        now,
+                    )
+                    raise APIError(403, "FORBIDDEN")
                 self.rate_limits.check(p, now)
                 rules = self.faults.take(
                     tenant["id"], request.method, request.url.path, p.client_id

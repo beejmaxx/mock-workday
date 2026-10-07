@@ -1,22 +1,21 @@
+import logging
 import os
+import sys
 import threading
 
 import uvicorn
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
 from starlette.exceptions import HTTPException
 
-from .api import admin, bp, documents, grants, oauth, workers
+from .api import admin, bp, documents, grants, identity, oauth, workers
 from .api.models import ErrorBody
 from .config import APP_URL, OWNER_URL
 from .db import Database
-from .errors import APIError, error_response, request_id
+from .errors import APIError, error_response
+from .request_logs import request_log
 from .service import Service
-
-
-def correlation(request: Request, response: Response):
-    response.headers["X-Request-Id"] = request_id(request)
 
 
 def create_apps(db, *, test_admin=False):
@@ -26,7 +25,7 @@ def create_apps(db, *, test_admin=False):
         result = FastAPI(
             title=title,
             version="1.0.0",
-            dependencies=[Depends(correlation)],
+            dependencies=[Depends(request_log)],
             responses={
                 code: {"model": ErrorBody}
                 for code in (400, 401, 403, 404, 409, 422, 429, 503, 504)
@@ -60,10 +59,12 @@ def create_apps(db, *, test_admin=False):
     if test_admin:
         private = app("Mock Workday Test Admin")
         private.include_router(admin.router)
+        private.include_router(identity.router)
     return public, private
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     test_admin = os.getenv("MW_TEST_ADMIN") == "1"
     db = Database(APP_URL, OWNER_URL if test_admin else None)
     public, private = create_apps(db, test_admin=test_admin)
@@ -71,12 +72,12 @@ def main():
     admin_thread = None
     if private:
         admin_server = uvicorn.Server(
-            uvicorn.Config(private, host="0.0.0.0", port=8081)
+            uvicorn.Config(private, host="0.0.0.0", port=8081, access_log=False)
         )
         admin_thread = threading.Thread(target=admin_server.run, daemon=True)
         admin_thread.start()
     try:
-        uvicorn.run(public, host="0.0.0.0", port=8080)
+        uvicorn.run(public, host="0.0.0.0", port=8080, access_log=False)
     finally:
         if admin_server:
             admin_server.should_exit = True
