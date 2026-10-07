@@ -30,3 +30,13 @@ build/
 *.sqlite3-shm
 *.log
 .DS_Store
+
+# Terraform state and local variables
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+crash.log

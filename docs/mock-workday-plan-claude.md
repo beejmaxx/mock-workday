@@ -389,6 +389,16 @@ Python, FastAPI, PostgreSQL, SQLAlchemy, pytest, and Docker Compose.
 
 After M2, the Agent Cell Runtime begins. Mock Workday changes only through versioned API changes the runtime needs.
 
+**D1: AWS deployment (after M1; does not block M1 or M2).** The lab must be reproducible and disposable:
+
+- Local development uses Docker Compose.
+- AWS deployment is fully provisioned by Terraform with no manual console steps.
+- Synthetic state is rebuilt from schema plus deterministic seed, so the AWS environment can be destroyed between study sessions and recreated identically.
+- `terraform destroy` is a normal workflow.
+- A leftover check catches resources that keep billing.
+
+Details are in spec §12.
+
 ## Seed scenario (synthetic)
 
 ```text

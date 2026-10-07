@@ -27,6 +27,7 @@ Unlabeled statements are implementation choices.
 | Tokens | PyJWT with `cryptography`, RS256 |
 | Tests | pytest. A session fixture creates a throwaway Postgres cluster (`initdb` into a temporary directory, `pg_ctl start` on a free port), so tests need no Docker. |
 | Packaging | `Dockerfile` and `compose.yaml` for running the service and Postgres together. Container builds are not required to run tests. |
+| Local workflow | `Makefile` targets: `make test` (throwaway Postgres, no Docker), `make up` (Compose: service + Postgres, schema + seed), `make down` (Compose down, volumes removed) |
 | Schema | `schema.sql` applied by the owner role; no migration framework in v1 |
 
 ```text
@@ -93,7 +94,9 @@ mock-workday/
 
 **Conventions:**
 
-- IDs are opaque WIDs: 32 lowercase hex characters, random [WD-inspired]. Stored as `uuid` and rendered as hex without dashes.
+- IDs are opaque WIDs: 32 lowercase hex characters [WD-inspired]. Stored as `uuid` and rendered as hex without dashes.
+  - **Seed IDs are deterministic:** `uuid5(MW_NAMESPACE, f"{tenant_slug}:{object_type}:{ref}")`, where `MW_NAMESPACE` is a fixed UUID in code. Reseeding any environment reproduces the same IDs.
+  - IDs created at runtime (events, documents, grants) are random `uuid4`.
 - Reference IDs are human-readable and unique per tenant, for example employee ID `E1001` or organization reference `SO-ENG`.
 - Time is `timestamptz` in UTC. Business dates are `date` values, interpreted in UTC [Lab].
 
@@ -935,7 +938,23 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 
 ---
 
-## 12. Deliberate limitations (v1)
+## 12. Reproducible, disposable environments [Lab requirement]
+
+All data is synthetic, so every environment must be disposable: destroying it loses nothing, and recreating it yields the same Acme and Globex world.
+
+- **Deterministic state:** schema plus deterministic seed (§2, §10) fully reconstructs application state. Signing keys and runtime-created records are regenerated, not preserved.
+- **Local:** Docker Compose via `make up` / `make down`. Tests never require Docker.
+- **AWS (milestone D1, after M1; not part of M1):** a separate spec, written when D1 starts, must satisfy:
+  - Everything is provisioned by Terraform under `infra/`, with no manual console steps and no dependence on console-created resources.
+  - `terraform destroy` is a normal, documented workflow, not disaster recovery.
+  - Terraform state lives outside the destroyed environment: local state (gitignored) initially, a remote backend later if useful.
+  - Every resource carries `Project=mock-workday` and `Environment=<name>` tags.
+  - Wrappers: create, deploy, migrate and seed, run acceptance tests against the deployment, destroy.
+  - A leftover check after destroy lists tagged resources and common cost leaks: load balancers, NAT gateways, EBS volumes, Elastic IPs, RDS instances and snapshots, CloudWatch log groups.
+  - Prefer resources that cost nothing when idle. Anything always-on and billable is called out in the README with its approximate cost.
+  - Respect the account's constraints: the selected Region (`us-east-2`), the account plan's supported services, and any spend limit.
+
+## 13. Deliberate limitations (v1)
 
 - Rate-limit and fault state live in process memory; there is one service process.
 - Organizations, positions, and role assignments are not effective-dated.
