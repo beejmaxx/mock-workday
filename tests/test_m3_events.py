@@ -453,3 +453,25 @@ def test_T_M3_E_04_redrive_rejects_foreign_and_modified_messages(env):
             )
         queue_stub.assert_no_pending_responses()
         event_stub.assert_no_pending_responses()
+
+
+def test_T_M3_E_02_dispatcher_survives_unexpected_pass_failure(monkeypatch, caplog):
+    from threading import Event
+
+    stop = Event()
+    calls = []
+
+    def dispatch(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise TypeError("sensitive event detail must not be logged")
+        stop.set()
+
+    monkeypatch.setattr(events, "dispatch_once", dispatch)
+    monkeypatch.setattr(stop, "wait", lambda seconds: None)
+    events.dispatcher(object(), stop)
+    assert len(calls) == 2
+    record = json.loads(caplog.records[-1].message)
+    assert record == {"event": "outbox_dispatch_failed", "exception_class": "TypeError"}
+    assert "sensitive event detail" not in caplog.text
+    assert caplog.records[-1].exc_info is None

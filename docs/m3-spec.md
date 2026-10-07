@@ -750,6 +750,10 @@ updates only to delivery bookkeeping. A rollback leaves no publishable event.
 **[Lab policy]** One small dispatcher loop in the same service image scans
 committed due rows by tenant in bounded batches (at most 10). Use row locking
 with `SKIP LOCKED` while publishing/marking a batch to avoid overlapping dispatch.
+Holding claimed row locks across PutEvents is a deliberate small-service trade-off,
+bounded by SDK retries/timeouts. Lease-then-publish is the larger-scale alternative
+with shorter transactions but additional lease/recovery logic. A top-level
+Exception guard logs only the exception class and keeps the dispatcher running.
 Inspect every `PutEvents` entry result. Mark only accepted entries published;
 retry failed or unknown outcomes with exponential backoff capped at 60 seconds.
 SDK timeouts bound each attempt. A crash after acceptance but before marking
@@ -1255,6 +1259,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D42 — H: Owner CLI prepares immutable credential versions; isolated admin API activates references | Grant Secrets Manager writes to the service | Preserves the specified read-only tenant verification role and keeps enrollment material out of Terraform/state; local test-admin can generate synthetic credentials directly |
 | D43 — I: Repeatable-read synchronous NDJSON, private temporary file, bounded single S3 PutObject; local bounded DB bytes and process-signed capability | Multipart transfers, background report jobs or local filesystem object service | A 16-MiB cap fits one request and avoids multipart cleanup or another service; existing authorization applies to a coherent snapshot and local restart safely invalidates URLs |
 | D44 — G: BP history UUID is transition identity; one in-process dispatcher, wall-clock retry bookkeeping and bounded owner repair | New notification identity/queue/dispatcher deployment or publish-before-commit | Durable history gives exact reconstruction and deduplication; the approved outbox closes dual-write loss while keeping deployment small and failures visible |
+| D45 — G: Hold claimed rows locked through bounded PutEvents; keep looping after unexpected exceptions | Lease-then-publish with a separate acknowledgment transaction | Keeps claim/mark atomic and inspectable at lab scale; leases shorten locks at larger scale but add recovery state; class-only error logs preserve privacy while intent remains retryable |
 
 ## 11. Reviewer decisions and remaining deployment inputs
 

@@ -705,7 +705,12 @@ it cannot change detail or delete rows.
 **[Lab policy]** The executable service starts one synchronous dispatcher thread
 in its existing image. Every second it scans enabled tenants and selects at most
 10 due rows per tenant with `FOR UPDATE SKIP LOCKED`, holding the transaction
-through publication/marking. SDK calls use bounded retries/timeouts. Each
+through publication/marking. This deliberately holds claimed row locks and a DB
+connection across PutEvents, bounded by SDK retries/timeouts. It keeps claim and
+acknowledgment simple in this small service; a lease-then-publish design would
+reduce lock duration at larger scale but adds lease expiry and recovery logic.
+The top-level dispatcher catches any Exception, logs only its class (never
+message/traceback), and continues the next pass. SDK calls use bounded retries/timeouts. Each
 `PutEvents` entry is inspected independently: only an entry with an EventId and
 no error is marked published. Failed or unknown outcomes persist a generic
 error and retry after 1, 2, 4, 8, 16, 32, then 60 seconds (capped). Logs expose

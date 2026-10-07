@@ -9,7 +9,6 @@ from uuid import UUID
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy.exc import SQLAlchemyError
 
 from .db import one, rows, run
 from .storage import SDK_CONFIG
@@ -193,9 +192,16 @@ def dispatcher(service, stop):
             if bus and client is None:
                 client = boto3.session.Session().client("events", config=SDK_CONFIG)
             dispatch_once(service, client, bus)
-        except (SQLAlchemyError, BotoCoreError, ClientError):
-            # Keep intent durable and retry; exception text can contain event details.
-            logger.error(json.dumps({"event": "outbox_dispatch_failed"}))
+        except Exception as exc:  # noqa: BLE001 — the dispatcher must survive a failed pass
+            # Exception messages and tracebacks can contain event details.
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "outbox_dispatch_failed",
+                        "exception_class": type(exc).__name__,
+                    }
+                )
+            )
         stop.wait(1)
 
 
