@@ -14,15 +14,40 @@ def main():
     for item in aws("elbv2", "describe-load-balancers")["LoadBalancers"]:
         record("load balancer", item["LoadBalancerArn"])
     for item in aws("elbv2", "describe-target-groups")["TargetGroups"]:
-        record("target group", item["TargetGroupArn"])
+        print("INFO target group:", item["TargetGroupArn"])
     for cluster in aws("ecs", "list-clusters")["clusterArns"]:
         for service in aws("ecs", "list-services", "--cluster", cluster)["serviceArns"]:
-            record("ECS service", service)
-        for status in ("RUNNING", "PENDING"):
-            for task in aws(
-                "ecs", "list-tasks", "--cluster", cluster, "--desired-status", status
-            )["taskArns"]:
-                record("ECS task", task)
+            print("INFO ECS service:", service)
+        task_arns = set()
+        # Desired STOPPED can still mean a task is stopping and consuming resources.
+        for status in ("RUNNING", "STOPPED"):
+            task_arns.update(
+                aws(
+                    "ecs",
+                    "list-tasks",
+                    "--cluster",
+                    cluster,
+                    "--desired-status",
+                    status,
+                )["taskArns"]
+            )
+        task_arns = sorted(task_arns)
+        for offset in range(0, len(task_arns), 100):
+            result = aws(
+                "ecs",
+                "describe-tasks",
+                "--cluster",
+                cluster,
+                "--tasks",
+                *task_arns[offset : offset + 100],
+            )
+            for failure in result.get("failures", []):
+                # A task may disappear between listing and describing it.
+                if failure.get("reason") != "MISSING":
+                    raise SystemExit(f"Could not inspect ECS task: {failure}")
+            for task in result["tasks"]:
+                if task["lastStatus"] != "STOPPED":
+                    record("ECS task", task["taskArn"])
     for item in aws("rds", "describe-db-instances")["DBInstances"]:
         record("RDS instance", item["DBInstanceIdentifier"])
     for item in aws("rds", "describe-db-snapshots")["DBSnapshots"]:
@@ -42,7 +67,7 @@ def main():
         "--filters",
         "Name=status,Values=available",
     )["NetworkInterfaces"]:
-        record("unattached ENI", item["NetworkInterfaceId"])
+        print("INFO unattached ENI:", item["NetworkInterfaceId"])
     for item in aws("ec2", "describe-volumes")["Volumes"]:
         record("EBS volume", item["VolumeId"])
     for item in aws("secretsmanager", "list-secrets", "--include-planned-deletion")[
@@ -64,7 +89,7 @@ def main():
         if ":ecr:" not in arn and not any(
             identifier == arn for _, identifier in remaining
         ):
-            record("project-tagged resource", arn)
+            print("WARNING (informational only) tagging API entry:", arn)
     repositories = aws("ecr", "describe-repositories")["repositories"]
     for item in repositories:
         if item["repositoryName"] == "mock-workday":

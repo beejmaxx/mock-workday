@@ -226,4 +226,8 @@ study sessions.** RDS provisioning may take several minutes. Destroying the
 service retains the registry and platform; image/state storage can still incur
 small charges. The leftover checker scans the dev account for the listed resource
 classes (including untagged resources and logs in `us-east-1`), so unrelated
-projects may also be reported. It never deletes anything automatically.
+projects may also be reported. Service-specific list/describe calls determine
+failure; tag-only findings are informational warnings and do not fail the check.
+STOPPED tasks and task definitions do not count as billable leftovers. Target
+groups, ECS service metadata and unattached ENIs are informational inventory.
+It never deletes anything automatically.

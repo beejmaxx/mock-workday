@@ -114,3 +114,15 @@ Prod; TLS and custom domains; CI/CD; Multi-AZ RDS; autoscaling; WAF; running the
 | T-D1-02 | Non-superuser master bootstrap on a fresh database, then rerun without reseeding or rotating signing keys |
 | T-D1-03 | Missing login roles created without superuser/RLS bypass; rerun updates passwords |
 | T-D1-04 | Admin-disabled service starts, authenticates and reads workers with no owner credentials or owner engine; admin routes remain absent |
+
+Leftover-check verdicts use service-specific list/describe results, not the
+Resource Groups Tagging API. Tag-only entries are informational warnings because
+that index can retain deleted resources. Target groups, ECS service metadata and
+unattached ENIs are informational inventory. ECS tasks are described and STOPPED
+tasks are ignored; task definitions (including INACTIVE revisions) do not trigger
+failure. Active tasks and the other listed potentially billable resources do.
+Expected persistent registry/platform resources remain exempt.
+
+| Test | Behavior |
+|---|---|
+| T-D1-05 | Stale tag-only resources, INACTIVE task-definition tags and STOPPED tasks do not fail the leftover check; live service resources still fail, and task inspection errors cannot report success (mocked AWS responses) |
