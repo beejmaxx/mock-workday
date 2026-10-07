@@ -56,8 +56,8 @@ mock-workday/
 **Processes:**
 
 - One process serves two ASGI apps.
-- **Public API:** port 8080 by default.
-- **Test-admin API:** port 8081, mounted only when `MW_TEST_ADMIN=1`. It must never share the public port.
+- **Public API:** container port 8080; Compose publishes to `127.0.0.1:${MW_PUBLIC_PORT:-8080}`.
+- **Test-admin API:** container port 8081, enabled only when `MW_TEST_ADMIN=1`; Compose publishes to `127.0.0.1:${MW_ADMIN_PORT:-8081}`. It must never share the public port. Host-port overrides are Compose settings, not application configuration.
 
 ---
 
@@ -665,7 +665,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 | 409 | `VERSION_CONFLICT`, `PENDING_CHANGE_EXISTS`, `EFFECTIVE_DATE_PASSED`, `POSITION_OCCUPIED`, `INVALID_STATE` |
 | 422 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REUSED` |
 | 429 | `RATE_LIMITED` |
-| 503 | `AUDIT_UNAVAILABLE` |
+| 503 | `AUDIT_UNAVAILABLE`, `SERVICE_UNAVAILABLE` (injected status fault) |
 | 504 | `SIMULATED_LOST_RESPONSE` (fault injection only) |
 
 ---

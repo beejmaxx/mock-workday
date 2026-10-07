@@ -49,7 +49,7 @@ def start_faults(rules, conn):
             status = rule["value"]
             raise APIError(
                 status,
-                "RATE_LIMITED" if status == 429 else "AUDIT_UNAVAILABLE",
+                "RATE_LIMITED" if status == 429 else "SERVICE_UNAVAILABLE",
                 headers={"Retry-After": "1"} if status == 429 else None,
             )
         elif rule["type"] == "audit_write_failure":

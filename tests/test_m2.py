@@ -433,10 +433,12 @@ def test_T_F_01_matching_counts(env, monkeypatch):
         )
         assert env.get(event["href"], token).status_code == 200
         delegated = env.delegated("priya")
-        assert [env.get(event["href"], delegated).status_code for _ in range(3)] == [
-            status,
-            status,
-            200,
+        responses = [env.get(event["href"], delegated) for _ in range(3)]
+        assert [response.status_code for response in responses] == [status, status, 200]
+        expected_code = "RATE_LIMITED" if status == 429 else "SERVICE_UNAVAILABLE"
+        assert [response.json()["error"]["code"] for response in responses[:2]] == [
+            expected_code,
+            expected_code,
         ]
 
 

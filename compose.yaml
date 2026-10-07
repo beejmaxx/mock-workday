@@ -17,8 +17,8 @@ services:
     environment:
       MW_TEST_ADMIN: ${MW_TEST_ADMIN:-0}
     ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:${MW_PUBLIC_PORT:-8080}:8080"
+      - "127.0.0.1:${MW_ADMIN_PORT:-8081}:8081"
     depends_on:
       db:
         condition: service_healthy
