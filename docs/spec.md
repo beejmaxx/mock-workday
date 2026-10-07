@@ -84,6 +84,7 @@ mock-workday/
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
   ```
 
+- **Explicit tenant predicates:** every query and mutation on tenant-scoped tables also filters by `tenant_id`; inserts carry it explicitly. RLS is the backstop, not the only isolation.
 - **Per-transaction tenant context:** every request transaction begins with `SELECT set_config('app.tenant_id', :tid, true)`. The third argument (`true`) is equivalent to `SET LOCAL`, so the setting cannot leak through pooled connections. Code that needs a transaction must obtain it through `db.tenant_tx(tenant_id)`.
 - **Global tables** (`tenants`, `signing_keys`) have no RLS. `mw_app` has `SELECT` on them; only `mw_owner` writes them.
 - **Audit tables:** `mw_app` has `INSERT, SELECT` only, with no `UPDATE` or `DELETE`.
@@ -622,7 +623,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 ### 6.5 Rate limiting
 
 - A token bucket per `(tenant, client_id)`, or `(tenant, account)` for direct human tokens.
-- In-process state driven by the controllable clock, so it is deterministic.
+- In-process state driven by the controllable clock, so it is deterministic. With `MW_TEST_ADMIN=1` (including tests), time moves only through set/advance. Otherwise it progresses in real time from the seed clock start.
 - **Defaults:** capacity 100, refill 50 per second.
 - The test admin can override limits per client.
 - **Exhaustion:** 429 `RATE_LIMITED` with `Retry-After: ceil(seconds until one token)`.
@@ -793,6 +794,8 @@ All job revisions are effective 2025-01-01.
 | `hr-assistant` | staffing, compensation, absence, documents | delegation client |
 | `directory-sync` | staffing | `isu-directory` |
 | `eng-sync` | staffing | `isu-eng-reader` |
+
+Client secrets are synthetic: `secret-<client_id>`. Disposable Compose database passwords are `mw-owner-lab` for `mw_owner`, `mw-app-lab` for `mw_app`, and `postgres-lab` for bootstrap. They are fixed local lab credentials, not external credentials.
 
 ### Documents
 
