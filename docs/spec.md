@@ -87,7 +87,13 @@ mock-workday/
 - **Explicit tenant predicates:** every query and mutation on tenant-scoped tables also filters by `tenant_id`; inserts carry it explicitly. RLS is the backstop, not the only isolation.
 - **Per-transaction tenant context:** every request transaction begins with `SELECT set_config('app.tenant_id', :tid, true)`. The third argument (`true`) is equivalent to `SET LOCAL`, so the setting cannot leak through pooled connections. Code that needs a transaction must obtain it through `db.tenant_tx(tenant_id)`.
 - **Global tables** (`tenants`, `signing_keys`) have no RLS. `mw_app` has `SELECT` on them; only `mw_owner` writes them.
-- **Audit tables:** `mw_app` has `INSERT, SELECT` only, with no `UPDATE` or `DELETE`.
+- **Least privilege for `mw_app`:**
+  - `SELECT` only on reference/configuration tables: `tenant_config`, `organizations`, `positions`, `workers`, `accounts`, `role_assignments`, `security_groups`, `api_clients`, `integration_group_members`, `integration_group_orgs`, and `domain_grants`.
+  - `SELECT, INSERT` on `job_revisions`, `compensation_revisions`, and `documents`; no `UPDATE` or `DELETE`. Revisions are append-only to preserve effective-dated history and stable pagination.
+  - `SELECT, INSERT` plus column-level `UPDATE (revoked_at)` on `delegation_grants`; no other updates or deletes.
+  - `INSERT, SELECT` only on audit tables; no `UPDATE` or `DELETE`.
+  - `USAGE` only on the two revision sequences, for inserts.
+- **Admin mutations** (role assignments, account/client disabling, policy-version changes, and reset) run as `mw_owner`, not `mw_app`.
 
 ---
 
@@ -381,7 +387,7 @@ def authorize(p, action: READ|WRITE, domain, target, now) -> Decision:
 | Document without read | 404 |
 | Business-process event not viewable (§5.6) | 404 |
 | Write denied on a visible object | 403 |
-| Lists | Unauthorized rows omitted silently |
+| Lists | Unauthorized rows omitted silently, without denial audit records |
 
 ---
 
@@ -550,6 +556,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 | `GET /api/v1/workers/{wid}/history` | revisions; compensation fields only with WORKER_COMPENSATION | M1 |
 | `GET /api/v1/workers/{wid}/direct-reports?as_of=` | WORKER_BASIC per row | M1 |
 | `GET /api/v1/organizations/{wid}` and `…/{wid}/workers` | organizations: any authenticated tenant principal [Lab]; workers: per row | M1 |
+| `GET /api/v1/positions/{wid}` | any authenticated tenant principal, like organizations [Lab] | M1 |
 | `GET /api/v1/documents?owner_worker_id=&org_id=&limit=&cursor=` | document domain per row | M1 |
 | `GET /api/v1/documents/{wid}` | document domain (audited if ≥ CONFIDENTIAL) | M1 |
 | `POST /api/v1/documents` | document domain write, relative to the target | M1 |
@@ -580,6 +587,7 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
   ```
 
 - **Organization:** `{id, descriptor, href, refId, superior: ref | null}`.
+- **Position:** `{id, descriptor, href, refId, organization: ref}`.
 - **Worker organizations:** the primary supervisory organization reference.
 - **Document metadata:** `{id, descriptor, href, title, domain, classification, owner: worker_ref | null, org: org_ref | null, created_at}`.
   - Lists return metadata only. They never return `content`.
@@ -678,11 +686,12 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 
 | Record | Written when | Transaction |
 |---|---|---|
-| `audit_authz` | Every sensitive read (compensation; history with compensation fields; single-document content reads ≥ CONFIDENTIAL; document lists return metadata only), every write decision, every denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
+| `audit_authz` | Every sensitive read (compensation; history with compensation fields; single-document content reads ≥ CONFIDENTIAL; document lists return metadata only), every write decision, every direct-request denial | Allowed sensitive reads and writes: same transaction, written **before** returning data. If the write fails, roll back and return 503 `AUDIT_UNAVAILABLE` [Lab experiment]. Denials: separate best-effort transaction; a failure is logged and the response stays a denial. |
 | `audit_objects` | Every inserted revision, document, event status change, grant creation or revocation | Same transaction as the change |
 | `bp_history` | Every initiate, approve, deny, or cancel action | Same transaction |
 
-- Non-sensitive allowed reads (basic worker data, organizations) are not audited in v1.
+- Non-sensitive allowed reads (basic worker data, organizations, positions) are not audited in v1.
+- Rows filtered out of worker or document lists are not denials and write no `audit_authz` records. List membership uses a non-auditing authorization check; a direct request denied access still produces a denial record.
 - Tests read audit tables directly. An audit API is deferred until the runtime needs correlation.
 
 ---
@@ -845,8 +854,9 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-ID-08 | Grant scopes beyond the client ceiling | 422 |
 | T-ID-09 | Key rotation: old-key token still valid until the key is retired; then 401 | as stated |
 | T-ID-10 | `tenant_id` in body or query of any request | ignored |
-| T-DB-01 | `mw_app` without `app.tenant_id` set reads tenant tables | zero rows or error, never data |
+| T-DB-01 | `mw_app` reads without tenant context; with Globex context, reads Acme rows by ID without a tenant predicate and attempts an Acme insert into an insertable table | no data without context; cross-tenant read empty; insert rejected by RLS `WITH CHECK` |
 | T-DB-02 | `mw_app` attempts `UPDATE` or `DELETE` on audit tables | permission denied |
+| T-DB-03 | `mw_app` attempts `UPDATE` or `DELETE` on job/compensation revisions and workers; inspect its table/column privileges | permission denied; grants match §1 least-privilege matrix |
 
 ### M1: Visibility matrix (reads as of the seed date)
 
@@ -921,12 +931,14 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-V-20 | HR Partner role assigned to a vacant position in Platform | does not prune Carol's reach |
 | T-V-21 | Manager group configured CURRENT_ONLY | sees Bob, not Grace |
 | T-V-22 | Worker organizations, organization detail/workers, direct reports | correct references, membership and authorization |
+| T-V-23 | Follow a worker position link using human, delegated or ISU tokens; unknown/cross-tenant position; missing token | documented position shape; any authenticated tenant principal allowed; 404 for missing/cross-tenant ID; 401 without authentication |
 | T-D-08 | Authorized document list | metadata only, no content; unauthorized documents omitted |
 | T-D-09 | Document target mismatch, UTF-8 content >64 KB, tenant-document write | 422 for invalid input; 403 for seed-only tenant writes |
 | T-D-10 | Document creation while object-audit INSERT fails | 503; document and authorization audit roll back |
 | T-P-07 | Document keyset pagination and filters; limit >200 | complete metadata scan; filters honored; invalid limit rejected |
 | T-E-03 | Two compensation revisions with the same effective date | latest recorded sequence wins |
 | T-A-04 | Delegated sensitive read | audit records human, client and grant |
+| T-A-05 | Bob lists workers/documents with unauthorized rows omitted, then directly requests Alice | list filtering writes no audit rows; direct denial is audited |
 | T-AD-01 | Admin disabled or accessed through public app | absent; never on public app |
 | T-AD-02 | Reset after mutations | deterministic seed restored; keys regenerated; clock and limits reset |
 | T-AD-03 | Requests while the admin clock is enabled | no wall-clock drift; only set/advance moves time |

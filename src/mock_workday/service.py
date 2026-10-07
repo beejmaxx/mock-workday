@@ -40,6 +40,9 @@ class Context:
         )
         raise APIError(404, "NOT_FOUND")
 
+    def visible_in_list(self, domain, target):
+        return authorize(self.conn, self.p, "READ", domain, target, self.now).allowed
+
     def check(self, action, domain, target, *, sensitive=False):
         decision = authorize(self.conn, self.p, action, domain, target, self.now)
         if not decision.allowed:

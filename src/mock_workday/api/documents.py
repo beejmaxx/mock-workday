@@ -66,7 +66,7 @@ def list_documents(
                 continue
             if org_id and doc["org_id"] != org_id:
                 continue
-            if ctx.check("READ", doc["domain"], target_for(ctx, doc)):
+            if ctx.visible_in_list(doc["domain"], target_for(ctx, doc)):
                 result.append(metadata(ctx, doc))
         return page(
             result,

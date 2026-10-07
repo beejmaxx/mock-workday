@@ -1,8 +1,10 @@
+from uuid import uuid4
+
 import jwt
 import pytest
 from sqlalchemy.exc import DBAPIError
 
-from mock_workday.db import rows, run
+from mock_workday.db import one, rows, run
 from mock_workday.ids import seed_id
 
 
@@ -131,6 +133,104 @@ def test_T_DB_01_rls_without_context(env):
             assert rows(conn, "SELECT * FROM workers") == []
         except DBAPIError:
             pass
+
+
+def test_T_DB_01_cross_tenant_read_and_insert(env):
+    acme = seed_id("acme", "tenant", "acme")
+    globex = seed_id("globex", "tenant", "globex")
+    bob = seed_id("acme", "workers", "Bob")
+    with env.db.tenant_tx(globex) as conn:
+        # Deliberately omit tenant predicates to exercise RLS independently.
+        assert rows(conn, "SELECT * FROM workers WHERE id=:id", id=bob) == []
+        assert one(
+            conn,
+            "SELECT * FROM workers WHERE id=:id",
+            id=seed_id("globex", "workers", "Eve"),
+        )
+
+    insert = """INSERT INTO job_revisions
+        (id,tenant_id,worker_id,position_id,effective_date,recorded_at)
+        VALUES (:id,:tid,:worker,:position,'2025-01-01',:now)"""
+    values = {
+        "tid": acme,
+        "worker": bob,
+        "position": seed_id("acme", "positions", "P-ENG-1"),
+        "now": env.service.clock.now(),
+    }
+    # The same valid Acme data is insertable with the matching tenant context.
+    with env.db.tenant_tx(acme) as conn:
+        run(conn, insert, id=uuid4(), **values)
+    with pytest.raises(DBAPIError) as error, env.db.tenant_tx(globex) as conn:
+        run(conn, insert, id=uuid4(), **values)
+    assert error.value.orig.sqlstate == "42501"
+    assert 'row-level security policy for table "job_revisions"' in str(
+        error.value.orig
+    )
+
+
+@pytest.mark.parametrize(
+    "table", ["job_revisions", "compensation_revisions", "workers"]
+)
+@pytest.mark.parametrize("verb", ["UPDATE", "DELETE"])
+def test_T_DB_03_immutable_rows(env, table, verb):
+    with (
+        pytest.raises(DBAPIError) as error,
+        env.db.tenant_tx(seed_id("acme", "tenant", "acme")) as conn,
+    ):
+        sql = (
+            f"UPDATE {table} SET id=id WHERE tenant_id=:tid"
+            if verb == "UPDATE"
+            else f"DELETE FROM {table} WHERE tenant_id=:tid"
+        )
+        run(conn, sql)
+    assert error.value.orig.sqlstate == "42501"
+    assert f"permission denied for table {table}" in str(error.value.orig)
+
+
+def test_T_DB_03_least_privilege_matrix(env):
+    read_only = (
+        "tenants",
+        "signing_keys",
+        "tenant_config",
+        "organizations",
+        "positions",
+        "workers",
+        "accounts",
+        "role_assignments",
+        "security_groups",
+        "api_clients",
+        "integration_group_members",
+        "integration_group_orgs",
+        "domain_grants",
+    )
+    insertable = (
+        "job_revisions",
+        "compensation_revisions",
+        "documents",
+        "delegation_grants",
+        "audit_authz",
+        "audit_objects",
+    )
+    with env.db.tenant_tx(seed_id("acme", "tenant", "acme")) as conn:
+        for table in read_only + insertable:
+            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+                allowed = one(
+                    conn,
+                    "SELECT has_table_privilege(current_user, :table, :privilege) AS allowed",
+                    table=table,
+                    privilege=privilege,
+                )["allowed"]
+                assert allowed == (
+                    privilege == "SELECT"
+                    or (privilege == "INSERT" and table in insertable)
+                ), (table, privilege)
+        columns = rows(
+            conn,
+            """SELECT attname FROM pg_attribute
+            WHERE attrelid='delegation_grants'::regclass AND attnum>0 AND NOT attisdropped
+              AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE')""",
+        )
+        assert [row["attname"] for row in columns] == ["revoked_at"]
 
 
 @pytest.mark.parametrize("table", ["audit_authz", "audit_objects"])

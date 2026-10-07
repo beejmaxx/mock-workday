@@ -11,6 +11,7 @@ from .models import (
     Compensation,
     HistoryItem,
     Organization,
+    Position,
     Reference,
     Worker,
     WorkerPage,
@@ -89,7 +90,7 @@ def workers_page(
         if not job or (orgs is not None and job["org_id"] not in orgs):
             continue
         target = worker_target(ctx.conn, worker["id"], ctx.now)
-        if ctx.check("READ", "WORKER_BASIC", target):
+        if ctx.visible_in_list("WORKER_BASIC", target):
             result.append(worker_shape(ctx, worker, job))
     return page(
         result,
@@ -308,3 +309,20 @@ def organization_workers(
             limit,
             cursor,
         )
+
+
+@router.get("/positions/{wid}", response_model=Position)
+def position(request: Request, wid: UUID):
+    with request.app.state.service.request(request) as ctx:
+        row = one(
+            ctx.conn,
+            "SELECT * FROM positions WHERE tenant_id=:tid AND id=:id",
+            id=wid,
+        )
+        if not row:
+            ctx.not_found(Target("positions", wid))
+        return {
+            **ref("positions", row, "title"),
+            "refId": row["ref_id"],
+            "organization": org_ref(ctx.conn, row["org_id"]),
+        }

@@ -1,6 +1,8 @@
 from datetime import date
 from uuid import uuid4
 
+import pytest
+
 from mock_workday.db import one, rows, run
 from mock_workday.ids import seed_id
 
@@ -168,3 +170,26 @@ def test_T_A_04_delegated_audit(env):
         assert row["client_id"] == "hr-assistant"
         assert row["grant_id"] is not None
         assert row["account_id"] == seed_id("acme", "accounts", "carol")
+
+
+@pytest.mark.parametrize(
+    "listing,expected", [("workers", 1), ("documents", 3), ("organization-workers", 1)]
+)
+def test_T_A_05_list_filtering_is_not_denial(env, listing, expected):
+    path = (
+        "/api/v1/organizations/" + env.id("organizations", "SO-ENG") + "/workers"
+        if listing == "organization-workers"
+        else "/api/v1/" + listing
+    )
+    token = env.login("bob")
+    result = env.get(path, token)
+    assert result.status_code == 200
+    assert len(result.json()["data"]) == expected
+    with env.db.tenant_tx(seed_id("acme", "tenant", "acme")) as conn:
+        assert rows(conn, "SELECT * FROM audit_authz WHERE tenant_id=:tid") == []
+    assert env.get(env.worker("Alice"), token).status_code == 404
+    with env.db.tenant_tx(seed_id("acme", "tenant", "acme")) as conn:
+        audit = rows(conn, "SELECT * FROM audit_authz WHERE tenant_id=:tid")
+        assert len(audit) == 1
+        assert audit[0]["decision"] == "DENY"
+        assert audit[0]["resource_id"] == seed_id("acme", "workers", "Alice")

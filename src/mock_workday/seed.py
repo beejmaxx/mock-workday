@@ -1,3 +1,5 @@
+from functools import cache
+
 from .auth import hash_secret, rotate_key
 from .clock import SEED_TIME
 from .db import run
@@ -77,6 +79,12 @@ CLIENTS = [
     ("directory-sync", ["staffing"], "isu-directory"),
     ("eng-sync", ["staffing"], "isu-eng-reader"),
 ]
+
+
+@cache
+def seed_hash(value):
+    # Only synthetic seed credentials are cached; login verification still runs scrypt.
+    return hash_secret(value)
 
 
 def seed(db):
@@ -167,7 +175,7 @@ def seed(db):
                     username=name.lower(),
                     kind="HUMAN",
                     worker_id=wid,
-                    password_hash=hash_secret("pw-" + name.lower()),
+                    password_hash=seed_hash("pw-" + name.lower()),
                     ui_sessions_allowed=True,
                 )
             if slug == "acme":
@@ -222,7 +230,7 @@ def seed(db):
                         username,
                         username=username,
                         kind="ISU",
-                        password_hash=hash_secret("pw-" + username),
+                        password_hash=seed_hash("pw-" + username),
                         ui_sessions_allowed=False,
                     )
                     run(
@@ -247,7 +255,7 @@ def seed(db):
                         name=client,
                         scope_ceiling=scopes,
                         isu_account_id=sid("accounts", isu) if isu else None,
-                        secret_hash=hash_secret("secret-" + client),
+                        secret_hash=seed_hash("secret-" + client),
                     )
             docs = [
                 (

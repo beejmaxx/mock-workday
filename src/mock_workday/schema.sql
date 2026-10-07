@@ -239,105 +239,106 @@ ALTER TABLE tenant_config FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON tenant_config
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_config TO mw_app;
+GRANT SELECT ON tenant_config TO mw_app;
 
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE organizations FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON organizations
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON organizations TO mw_app;
+GRANT SELECT ON organizations TO mw_app;
 
 ALTER TABLE positions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE positions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON positions
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON positions TO mw_app;
+GRANT SELECT ON positions TO mw_app;
 
 ALTER TABLE workers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workers FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON workers
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON workers TO mw_app;
+GRANT SELECT ON workers TO mw_app;
 
 ALTER TABLE job_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_revisions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON job_revisions
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON job_revisions TO mw_app;
+GRANT SELECT, INSERT ON job_revisions TO mw_app;
 
 ALTER TABLE compensation_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE compensation_revisions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON compensation_revisions
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON compensation_revisions TO mw_app;
+GRANT SELECT, INSERT ON compensation_revisions TO mw_app;
 
 ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounts FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON accounts
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON accounts TO mw_app;
+GRANT SELECT ON accounts TO mw_app;
 
 ALTER TABLE role_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE role_assignments FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON role_assignments
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON role_assignments TO mw_app;
+GRANT SELECT ON role_assignments TO mw_app;
 
 ALTER TABLE security_groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_groups FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON security_groups
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON security_groups TO mw_app;
+GRANT SELECT ON security_groups TO mw_app;
 
 ALTER TABLE api_clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_clients FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON api_clients
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON api_clients TO mw_app;
+GRANT SELECT ON api_clients TO mw_app;
 
 ALTER TABLE delegation_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delegation_grants FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON delegation_grants
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON delegation_grants TO mw_app;
+GRANT SELECT, INSERT ON delegation_grants TO mw_app;
+GRANT UPDATE (revoked_at) ON delegation_grants TO mw_app;
 
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON documents
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON documents TO mw_app;
+GRANT SELECT, INSERT ON documents TO mw_app;
 
 ALTER TABLE integration_group_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE integration_group_members FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON integration_group_members
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON integration_group_members TO mw_app;
+GRANT SELECT ON integration_group_members TO mw_app;
 
 ALTER TABLE integration_group_orgs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE integration_group_orgs FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON integration_group_orgs
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON integration_group_orgs TO mw_app;
+GRANT SELECT ON integration_group_orgs TO mw_app;
 
 ALTER TABLE domain_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domain_grants FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON domain_grants
     USING (tenant_id = current_setting('app.tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON domain_grants TO mw_app;
+GRANT SELECT ON domain_grants TO mw_app;
 
 ALTER TABLE audit_authz ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_authz FORCE ROW LEVEL SECURITY;
@@ -353,4 +354,4 @@ CREATE POLICY tenant_isolation ON audit_objects
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
 GRANT SELECT, INSERT ON audit_objects TO mw_app;
 
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mw_app;
+GRANT USAGE ON SEQUENCE job_revisions_recorded_seq_seq, compensation_revisions_recorded_seq_seq TO mw_app;

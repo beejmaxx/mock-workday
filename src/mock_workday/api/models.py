@@ -30,6 +30,11 @@ class Organization(Reference):
     superior: Reference | None
 
 
+class Position(Reference):
+    refId: str
+    organization: Reference
+
+
 class DocumentMetadata(Reference):
     title: str
     domain: str

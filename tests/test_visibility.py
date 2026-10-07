@@ -117,3 +117,38 @@ def test_T_V_22_organizations_and_direct_reports(env):
         env.get(env.worker("Bob", "/organizations"), env.isu("eng-sync")).status_code
         == 403
     )
+
+
+@pytest.mark.parametrize("principal", ["human", "delegated", "isu"])
+def test_T_V_23_position_reference(env, principal):
+    worker = env.get(env.worker("Bob"), env.login("bob")).json()
+    position_ref = worker["primaryPosition"]
+    if principal == "human":
+        token = env.login("bob")
+    elif principal == "delegated":
+        token = env.delegated("bob", "assistant", [])
+    else:
+        token = env.isu("eng-sync")
+    result = env.get(position_ref["href"], token)
+    assert result.status_code == 200
+    assert result.json() == {
+        **position_ref,
+        "refId": "P-ENG-1",
+        "organization": worker["primarySupervisoryOrganization"],
+    }
+    # Position references use tenant authentication, not worker visibility or scopes.
+    assert (
+        env.get("/api/v1/positions/" + env.id("positions", "P-CEO"), token).status_code
+        == 200
+    )
+    assert (
+        env.get(
+            "/api/v1/positions/" + env.id("positions", "P-GX-1", "globex"), token
+        ).status_code
+        == 404
+    )
+    assert (
+        env.get("/api/v1/positions/00000000000000000000000000000000", token).status_code
+        == 404
+    )
+    assert env.client.get(position_ref["href"]).status_code == 401
