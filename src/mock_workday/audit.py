@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from .db import run
+from .db import one, run
 from .errors import APIError
 
 logger = logging.getLogger(__name__)
@@ -96,14 +96,23 @@ def object_record(
         raise APIError(503, "AUDIT_UNAVAILABLE") from exc
 
 
-def process_history(conn, p, event_id, action, step_key, comment, now):
+def process_history(
+    conn, p, event_id, action, step_key, comment, now, *, request_id=None
+):
     check_failure(conn)
+    event = one(
+        conn, "SELECT * FROM bp_events WHERE tenant_id=:tid AND id=:id", id=event_id
+    )
+    history_id = uuid4()
     try:
         run(
             conn,
             """INSERT INTO bp_history VALUES
-            (:id,:tid,:event,:action,:step,:aid,:cid,:comment,:now,:by,:behalf,:agent,:asu,:credential,:legacy)""",
-            id=uuid4(),
+            (:id,:tid,:event,:action,:step,:aid,:cid,:comment,:now,:by,:behalf,:agent,:asu,:credential,:legacy,:rid,:version,:status)""",
+            id=history_id,
+            rid=request_id,
+            version=event["version"],
+            status=event["status"],
             event=event_id,
             action=action,
             step=step_key,
@@ -115,3 +124,11 @@ def process_history(conn, p, event_id, action, step_key, comment, now):
         )
     except SQLAlchemyError as exc:
         raise APIError(503, "AUDIT_UNAVAILABLE") from exc
+
+    from .events import detail_for, enqueue
+
+    history = one(
+        conn, "SELECT * FROM bp_history WHERE tenant_id=:tid AND id=:id", id=history_id
+    )
+    tenant = one(conn, "SELECT id,slug FROM tenants WHERE id=:tid")
+    enqueue(conn, detail_for(tenant, event, history))

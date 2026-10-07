@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
 from starlette.exceptions import HTTPException
 
-from .api import admin, bp, documents, grants, identity, oauth, workers
+from .api import admin, bp, documents, grants, identity, oauth, reports, workers
 from .api.models import ErrorBody
 from .config import APP_URL, OWNER_URL
 from .db import Database
@@ -52,8 +52,15 @@ def create_apps(db, *, test_admin=False):
 
     public = app("Mock Workday API")
     public.include_router(oauth.router)
+    public.include_router(reports.download_router)
     bearer = HTTPBearer(auto_error=False)
-    for router in (grants.router, workers.router, documents.router, bp.router):
+    for router in (
+        grants.router,
+        workers.router,
+        documents.router,
+        bp.router,
+        reports.router,
+    ):
         public.include_router(router, dependencies=[Depends(bearer)])
     private = None
     if test_admin:
@@ -68,6 +75,13 @@ def main():
     test_admin = os.getenv("MW_TEST_ADMIN") == "1"
     db = Database(APP_URL, OWNER_URL if test_admin else None)
     public, private = create_apps(db, test_admin=test_admin)
+    from .events import dispatcher
+
+    stop_dispatcher = threading.Event()
+    event_thread = threading.Thread(
+        target=dispatcher, args=(public.state.service, stop_dispatcher), daemon=True
+    )
+    event_thread.start()
     admin_server = None
     admin_thread = None
     if private:
@@ -79,6 +93,8 @@ def main():
     try:
         uvicorn.run(public, host="0.0.0.0", port=8080, access_log=False)
     finally:
+        stop_dispatcher.set()
+        event_thread.join()
         if admin_server:
             admin_server.should_exit = True
             admin_thread.join(timeout=10)

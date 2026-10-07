@@ -15,6 +15,7 @@ from .errors import APIError
 
 OPERATIONS = frozenset(
     (
+        "create_export_api_v1_report_exports_post",
         "list_workers_api_v1_workers_get",
         "get_worker_api_v1_workers__wid__get",
         "worker_organizations_api_v1_workers__wid__organizations_get",

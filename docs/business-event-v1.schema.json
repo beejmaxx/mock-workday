@@ -1,0 +1,131 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "tenant_id": {
+      "format": "uuid",
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "tenant_slug": {
+      "title": "Tenant Slug",
+      "type": "string"
+    },
+    "event_type": {
+      "enum": [
+        "job_change.submitted",
+        "job_change.approved",
+        "time_off.approved"
+      ],
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "business_process_event_id": {
+      "format": "uuid",
+      "title": "Business Process Event Id",
+      "type": "string"
+    },
+    "business_process_version": {
+      "minimum": 1,
+      "title": "Business Process Version",
+      "type": "integer"
+    },
+    "status": {
+      "enum": [
+        "IN_PROGRESS",
+        "SUCCESSFULLY_COMPLETED"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "subject_worker_id": {
+      "format": "uuid",
+      "title": "Subject Worker Id",
+      "type": "string"
+    },
+    "effective_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Effective Date"
+    },
+    "by_user_id": {
+      "format": "uuid",
+      "title": "By User Id",
+      "type": "string"
+    },
+    "on_behalf_of_user_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "On Behalf Of User Id"
+    },
+    "client_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Client Id"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "resource_href": {
+      "title": "Resource Href",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "tenant_id",
+    "tenant_slug",
+    "event_type",
+    "occurred_at",
+    "business_process_event_id",
+    "business_process_version",
+    "status",
+    "subject_worker_id",
+    "effective_date",
+    "by_user_id",
+    "on_behalf_of_user_id",
+    "client_id",
+    "request_id",
+    "resource_href"
+  ],
+  "title": "MockWorkday.BusinessEvent.v1 detail",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Notification only; source lab.mock-workday. Deduplicate by tenant_id/event_id, tolerate out-of-order versions, and re-fetch with current HTTP authority."
+}

@@ -73,6 +73,13 @@ def test_T_M3_SEED_01_02_full_dataset_manifest_and_rerun(env):
                 )["n"]
                 == 0
             )
+        with env.db.tenant_tx(tid) as conn:
+            assert (
+                one(
+                    conn, "SELECT count(*) AS n FROM event_outbox WHERE tenant_id=:tid"
+                )["n"]
+                == 0
+            )
         # A completed reload verifies data instead of overwriting it.
         assert load(env.db, slug) == expected
     assert 139 * 1024**2 < total_bytes < 141 * 1024**2
@@ -99,6 +106,17 @@ def test_T_M3_SEED_01_02_full_dataset_manifest_and_rerun(env):
         headers=headers,
     )
     assert page2.status_code == 200 and page2.json()["data"] != page.json()["data"]
+    exported = env.client.post(
+        "/api/v1/report-exports", headers=headers, json={"report": "worker-roster"}
+    )
+    assert exported.status_code == 201, exported.text
+    assert exported.json()["row_count"] == TENANTS["northstar"][0]
+    assert exported.json()["byte_length"] <= 16 * 1024**2
+    download = env.client.get(
+        exported.json()["download_url"], headers={"Host": "northstar.mockworkday.local"}
+    )
+    assert download.status_code == 200
+    assert len(download.content.splitlines()) == TENANTS["northstar"][0]
     cross = env.client.get(env.worker("Bob"), headers=headers)
     assert cross.status_code == 404
     with env.db.owner.connect() as conn:

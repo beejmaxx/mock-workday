@@ -765,6 +765,8 @@ Keep a bounded, audited operator history-range republish command as a repair
 tool, preserving stable IDs. It is not the normal delivery mechanism. Published
 outbox rows can be pruned after 7 days; never prune unpublished rows by age.
 
+**[Lab policy — slice 2c implementation]** Retry delays are fixed at 1, 2, 4, 8, 16, 32, then 60 seconds. The executable starts one dispatcher thread; the app factory/seed tools do not. Absent `MW_EVENT_BUS_ARN`, dispatch keeps a bounded 1,000-detail local capture. Owner repair selects at most 100 history transitions over at most seven days; owner pruning only removes published rows older than seven days. See main spec §5.7 for the implemented commands and schema artifact.
+
 ### 6.3 Cross-domain target and DLQ ownership
 
 **[Lab policy]** Mock Workday owns a custom EventBridge bus and one rule/target
@@ -1250,8 +1252,9 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D39 — Scope: No CloudFront/X-Ray/Macie/CloudHSM, multi-AZ RDS, autoscaling, SNS or internal queues beyond target DLQs | Add production infrastructure wholesale | Each excluded service either lacks a current need, violates the plan/stack constraints, or is unavailable; production resemblance does not justify unused machinery |
 | D40 — Integration: Versioned HTTP plus explicit event/export exceptions, no shared DB/code | Import runtime internals or share persistence | Keeps independent ownership and testable contracts despite broader enterprise-service functionality |
 | D41 — K: 200-by-200 synthetic name pools, family/level architecture and industry-specific prose before first bulk load | Numeric name suffixes, unrelated role rotation and repeated filler | Makes core-service examples believable without new schema fields, real personal data or a compensation engine; preserve counts/IDs and recompute content hashes |
-
 | D42 — H: Owner CLI prepares immutable credential versions; isolated admin API activates references | Grant Secrets Manager writes to the service | Preserves the specified read-only tenant verification role and keeps enrollment material out of Terraform/state; local test-admin can generate synthetic credentials directly |
+| D43 — I: Repeatable-read synchronous NDJSON, private temporary file, bounded single S3 PutObject; local bounded DB bytes and process-signed capability | Multipart transfers, background report jobs or local filesystem object service | A 16-MiB cap fits one request and avoids multipart cleanup or another service; existing authorization applies to a coherent snapshot and local restart safely invalidates URLs |
+| D44 — G: BP history UUID is transition identity; one in-process dispatcher, wall-clock retry bookkeeping and bounded owner repair | New notification identity/queue/dispatcher deployment or publish-before-commit | Durable history gives exact reconstruction and deduplication; the approved outbox closes dual-write loss while keeping deployment small and failures visible |
 
 ## 11. Reviewer decisions and remaining deployment inputs
 

@@ -1,6 +1,6 @@
 # Mock Workday: detailed specification (v1)
 
-**Status:** M1, M2 and D1 complete. M3 spec approved; slice 2a implemented for review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
+**Status:** M1, M2 and D1 complete. M3 spec and slices 2a–2b approved; slice 2c implemented for review. Implements [the plan](mock-workday-plan-claude.md). Workday evidence is in [workday-verification.md](workday-verification.md).
 
 **Labels:**
 
@@ -14,7 +14,9 @@ Unlabeled statements are implementation choices.
 
 - **M1:** §0–4, §6 except §6.4, §7, §8, §9 except faults, §10 except the M2 seed addition, and the M1 tests in §11.
 - **M2:** §5 (business processes), §6.4 (idempotency), fault injection in §9, the M2 seed addition, and the M2 tests in §11.
-- **M3 slice 2a:** tenant storage and STS sessions, bulk-v1 seeding and balance snapshots. Later M3 slices and AWS infrastructure follow [m3-spec.md](m3-spec.md).
+- **M3 slice 2a:** tenant storage and STS sessions, bulk-v1 seeding and balance snapshots.
+- **M3 slice 2b:** ASU identity, credential verification, attribution and request logs (§3.6).
+- **M3 slice 2c:** report exports (§6.7) and transactional business notifications (§5.7). Native AI and AWS infrastructure follow [m3-spec.md](m3-spec.md).
 
 ---
 
@@ -47,6 +49,8 @@ mock-workday/
 │   ├── authz.py          # security groups, reach, decisions
 │   ├── api/              # routers: oauth, workers, orgs, documents, bp, grants
 │   ├── bp.py             # Change Job and Request Time Off (M2)
+│   ├── reports.py        # bounded report snapshots and capability creation
+│   ├── events.py         # transactional outbox dispatch and owner repair
 │   ├── audit.py
 │   ├── idempotency.py    # (M2)
 │   ├── ratelimit.py
@@ -56,7 +60,7 @@ mock-workday/
 
 **Processes:**
 
-- One process serves two ASGI apps.
+- One process serves two ASGI apps and one outbox dispatcher thread.
 - **Public API:** container port 8080; Compose publishes to `127.0.0.1:${MW_PUBLIC_PORT:-8080}`.
 - **Test-admin API:** container port 8081, enabled only when `MW_TEST_ADMIN=1`; Compose publishes to `127.0.0.1:${MW_ADMIN_PORT:-8081}`. It must never share the public port. Host-port overrides are Compose settings, not application configuration.
 
@@ -97,6 +101,8 @@ mock-workday/
   - `SELECT, INSERT` on `bp_events` plus column-level `UPDATE (status, current_step, version, completed_at)`; on `bp_steps` plus `UPDATE (status, acted_by, acted_by_client, acted_at, comment)`. No deletes.
   - `SELECT, INSERT, DELETE` on `idempotency_records`; deletion is only for expired keys. No placeholder records or updates.
   - `INSERT, SELECT` only on audit tables (including `bp_history`); no `UPDATE` or `DELETE`.
+  - `SELECT, INSERT` on `report_exports`; no app updates/deletes.
+  - `SELECT, INSERT` on `event_outbox` plus `UPDATE (attempt_count,next_attempt_at,published_at,last_error)` only; no app detail updates/deletes.
   - `USAGE` only on the two revision sequences, for inserts.
 - **Admin mutations** (role assignments, account/client disabling, policy-version changes, and reset) run as `mw_owner`, not `mw_app`.
 
@@ -184,6 +190,14 @@ audit_identity(id, tenant_id, request_id, action, operator null,
                by_user_account_id null, on_behalf_of_user_account_id null,
                agent_id null, asu_id null, credential_version_id null, at)
 
+-- M3 slice 2c (Lab policy)
+report_exports(id, tenant_id, account_id, client_id null, grant_id null,
+               report, filters jsonb, row_count, byte_length, sha256,
+               object_key, content bytea null, created_at, expires_at)
+event_outbox(tenant_id, event_id → bp_history, schema_version, detail jsonb,
+             created_at, attempt_count, next_attempt_at, published_at null,
+             last_error null, pk(tenant_id,event_id))
+
 -- M2
 bp_events(id, tenant_id, type CHANGE_JOB|REQUEST_TIME_OFF, subject_worker_id,
           initiator_account_id, initiator_client_id null, status,
@@ -208,7 +222,10 @@ audit_objects(id, tenant_id, request_id, account_id, client_id, object_type,
               object_id, field, old_value jsonb, new_value jsonb, bp_event_id,
               at)
 bp_history(id, tenant_id, event_id, action, step_key, actor_account_id,
-           actor_client_id, comment, at)
+           actor_client_id, comment, at,
+           by_user_account_id null, on_behalf_of_user_account_id null,
+           agent_id null, asu_id null, credential_version_id null, legacy_delegated,
+           request_id null, business_process_version null, resulting_status null)
 ```
 
 ### 2.2 Effective-dated reads
@@ -656,6 +673,82 @@ The action endpoints take the body `{"expected_step", "expected_version", "comme
 
 ---
 
+### 5.7 Business notifications and transactional outbox (M3 slice 2c)
+
+**[Workday-inspired]** Committed business-process transitions emit notifications.
+**[Lab policy]** The versioned event contract is an explicit addition to the HTTP
+integration boundary: source `lab.mock-workday`, detail type
+`MockWorkday.BusinessEvent.v1`, and [detail JSON Schema](business-event-v1.schema.json).
+HTTP remains the only source of authority to read or mutate business records.
+
+**[Lab policy]** Emit `job_change.submitted` on initiation,
+`job_change.approved` on final approval, and `time_off.approved` on final approval.
+Intermediate approvals, denials, cancellations and seeded historical transitions
+do not publish. Future-effective approval does not assert that a job is already
+effective. History records gain original request ID, resulting status and BP
+version. The immutable history row UUID is the stable notification `event_id`.
+Detail contains schema version, tenant UUID/slug, event type, business-time
+`occurred_at`, BP ID/version/status, worker ID, effective date (null for time
+off), By User / On Behalf Of User, client ID, request ID and relative HTTP href.
+No salary, reason, comment, document body, credential or signed URL is copied.
+All fields are assembled from server state/history, not a caller's event body.
+
+**[Lab policy]** Insert `event_outbox` in the same transaction as history,
+revisions, audit, BP transition and idempotency receipt. Rollback leaves no
+publishable event; an idempotent replay creates none. The row stores tenant,
+stable event ID, schema version, immutable detail, wall-clock creation,
+attempt count, next attempt, nullable publication time and sanitized error.
+FORCE RLS and tenant predicates apply; JSON tenant/event/version must match the
+row identity. The app can INSERT/SELECT and UPDATE only delivery bookkeeping;
+it cannot change detail or delete rows.
+
+**[Lab policy]** The executable service starts one synchronous dispatcher thread
+in its existing image. Every second it scans enabled tenants and selects at most
+10 due rows per tenant with `FOR UPDATE SKIP LOCKED`, holding the transaction
+through publication/marking. SDK calls use bounded retries/timeouts. Each
+`PutEvents` entry is inspected independently: only an entry with an EventId and
+no error is marked published. Failed or unknown outcomes persist a generic
+error and retry after 1, 2, 4, 8, 16, 32, then 60 seconds (capped). Logs expose
+unpublished count and oldest age without details or remote error text.
+
+**[Lab policy]** A crash after AWS acceptance and before DB commit republishes
+with the same stable detail ID. Publication is at least once, conditional on
+infrastructure recovery and retained intent; duplicate and out-of-order arrival
+is normal. EventBridge envelope IDs can differ. Consumers deduplicate by
+`(tenant_id,event_id)`, use BP versions to identify stale notifications, tolerate
+version gaps, and refetch using current HTTP authority. An event carries no
+authority by itself. [AWS PutEvents entry-result semantics](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-putevents.html)
+also require deployment verification that the configured bus actually exists:
+AWS may report success while dropping events addressed to a nonexistent bus.
+That bus/rule/target verification remains a checkpoint-4 smoke requirement.
+
+**[Lab policy]** `MW_EVENT_BUS_ARN` selects AWS publication using the service's
+IAM role; absent means local capture, never AWS. Local dispatch marks rows
+published and keeps the most recent 1,000 details in a process-local test capture;
+PostgreSQL still retains intent/history. Tests call dispatch explicitly, so
+seeding and app-factory construction start no background work or AWS calls.
+There is no separate deployment, internal queue, consumer implementation or SNS.
+
+**[Lab policy]** Owner-only `python -m mock_workday.events --tenant UUID republish
+--start ISO_UTC --end ISO_UTC` repairs at most 100 history transitions in a
+half-open range no wider than seven days. It reconstructs original details/IDs,
+audits each selected notification, and atomically schedules outbox retry. Audit
+failure rolls repair back. `prune` removes only rows published more than seven
+days ago; unpublished rows never expire by age. History remains available to
+repair after pruning. These are operator tools, not normal delivery.
+
+**[Lab policy]** Cross-domain targets are approved external event buses, with
+explicit tenant allowlists and one provider-owned standard SQS DLQ per target.
+Receiver-side forwarding/SQS belongs to the other domain. Rule/role/resource
+policies, 24-hour/185-attempt delivery retry, DLQ encryption/14-day retention and
+alarms remain checkpoint-3/4 work described in M3 §6.3. The owner-only `redrive
+--queue-url URL` command receives at most ten messages from a provider DLQ,
+checks source/type/account/tenant/schema and exact committed history detail,
+audits the attempt, and deletes a message only after confirmed republication.
+Malformed, foreign or unknown outcomes remain for investigation/retry. A failed
+delete can duplicate delivery; redrive may also reach other matching targets.
+Provider DLQs cover delivery to the target bus, not downstream consumer failures.
+
 ## 6. API contract
 
 ### 6.1 Conventions
@@ -805,12 +898,83 @@ continues to make no balance changes. No balance write endpoint is added.
 | 403 | `FORBIDDEN` |
 | 404 | `NOT_FOUND`, `TENANT_NOT_FOUND` |
 | 409 | `VERSION_CONFLICT`, `PENDING_CHANGE_EXISTS`, `EFFECTIVE_DATE_PASSED`, `POSITION_OCCUPIED`, `INVALID_STATE` |
-| 422 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REUSED` |
+| 422 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REUSED`, `REPORT_TOO_LARGE` |
 | 429 | `RATE_LIMITED` |
-| 503 | `AUDIT_UNAVAILABLE`, `SERVICE_UNAVAILABLE` (injected status fault) |
+| 503 | `AUDIT_UNAVAILABLE`, `SERVICE_UNAVAILABLE` (dependency failure or injected status fault) |
 | 504 | `SIMULATED_LOST_RESPONSE` (fault injection only) |
 
 ---
+
+### 6.7 Report exports (M3 slice 2c)
+
+**[Workday-inspired]** `POST /api/v1/report-exports` accepts
+`{report: "worker-roster", as_of?: "YYYY-MM-DD", include_compensation?: false}`.
+Unknown reports/fields fail 422. This is one fixed synchronous report; no SQL,
+report jobs or document bodies. **[Lab policy]** The handler uses a PostgreSQL
+REPEATABLE READ snapshot, existing current-authority row checks, and requested
+as-of job/compensation revisions. It writes UTF-8 NDJSON to a private temporary
+file. Each line has the existing `Worker` response fields and, only when
+requested and authorized for that row, a `compensation` object with the existing
+`Compensation` response shape. Hidden workers are omitted. Unauthorized or
+missing compensation fields are absent; no fabricated values or null salaries.
+
+**[Lab policy]** Scoped clients need `staffing`, and `compensation` when requested.
+ASUs also need `create_export_api_v1_report_exports_post` in both issued and
+current operation ceilings. Ambient clients may export within their existing
+read authority. Direct humans retain their ordinary permissions. Limits are
+10,000 visible rows and 16 MiB encoded bytes including line endings; overflow
+returns 422 `REPORT_TOO_LARGE` without a successful snapshot or capability.
+Creation is a sensitive disclosure: authorization and object audit must commit
+before the response releases a URL. Authorization is evaluated in the report's
+snapshot; this is not a continuously reauthorized stream. Retries are new
+snapshots, with no idempotency guarantee.
+
+**[Lab policy]** Success is 201 with `{id, report, row_count, byte_length, sha256,
+created_at, expires_at, download_url}` and `Cache-Control: no-store`. Both report
+timestamps are wall-clock UTC, independent of the controllable business clock.
+The URL lasts at most 60 seconds, rounded down and capped by remaining token,
+grant, credential acceptance/certificate and signing STS-session lifetimes.
+Elapsed wall time during construction also consumes the original authority
+budget when business time is frozen. AWS `expires_at` is read from the generated
+SigV4 signature. If no usable lifetime remains, creation fails without a URL.
+
+**[Lab policy]** AWS writes an immutable, nonversioned S3 object at
+`tenants/{tenant UUID}/exports/{export UUID}` using the tenant-tagged session,
+that tenant's CMK, SSE-KMS and Bucket Keys. The returned regional HTTPS URL
+allows GET of that exact object only. Single bounded `PutObject` keeps the
+16-MiB lab transfer synchronous, avoids multipart leftovers, and uses
+`IfNoneMatch=*`. Failed upload/audit rolls back DB metadata and attempts object
+cleanup; unknown commit outcomes retain the object for lifecycle cleanup.
+Creation audit records filters, counts, checksum, object ID and actor/grant,
+never report bytes or a signed URL.
+
+**[Lab policy — explicit storage-boundary exception]** Report bytes may be
+fetched directly from S3 with the API-issued URL; documents remain API-only.
+A presigned URL is a bearer capability: anyone holding it may reuse it until
+expiry. Grant/role revocation does not instantly revoke an existing URL.
+Deleting the object or denying S3 access can block subsequent requests; an
+in-flight download may continue. Runtime networking must permit ordinary HTTPS
+to S3; report downloads do not traverse Mock Workday PrivateLink. No shared S3
+permissions or renewal/list endpoint are provided. See [AWS presigned URL
+semantics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html).
+
+**[Lab policy]** Local mode stores the bounded bytes in `report_exports.content`
+and returns `GET /api/v1/report-exports/{id}/download?expires=...&signature=...`.
+This capability requires no bearer header and is HMAC-bound to tenant, object,
+expiry and GET. It checks the stored expiry and checksum, supports reuse, and
+returns 404 on an invalid/expired capability. It does not recheck the originating
+grant. The process-local signing secret makes restart invalidate outstanding
+local URLs; local tenant disabling also blocks downloads. Downloads echo
+`X-Request-Id` and use `no-store`. Logs contain route templates, never query
+signatures. In AWS this local download route returns 404.
+
+**[Lab policy]** `report_exports` stores tenant, owner account/client/grant,
+report/filters, counts/checksum, object key, optional local bytes, and wall-clock
+creation/expiry. FORCE RLS, tenant predicates and composite foreign keys apply;
+app access is SELECT/INSERT only. Owner-only `python -m mock_workday.reports
+--tenant UUID` clears local bodies older than one day, retaining disclosure
+metadata. Terraform checkpoint 3 adds a one-day S3 lifecycle backstop for export
+prefixes (asynchronous storage cleanup, not access TTL); teardown empties them.
 
 ## 7. Documents
 
@@ -1282,6 +1446,20 @@ policy enforcement.
 | T-M3-A-02 | Structured JSON request IDs and redaction, 3-day CloudWatch retention/encryption in plan and live checks |
 
 CloudWatch retention/encryption and live IAM enforcement remain checkpoint-3/4 checks.
+
+### M3 slice 2c: exports and business notifications
+
+| ID | Acceptance |
+|---|---|
+| T-M3-R-01 | Report current row/field authorization, scope/operation checks, snapshot, size limit, no document-body export |
+| T-M3-R-02 | Export audit failure/S3 failure gives no URL; TTL caps and wall time; URL reuse, expiry and grant-revocation limitation; lifecycle cleanup |
+| T-M3-E-01 | Commit-only types/schema/tenant/actor/version; final vs intermediate approval; no sensitive content or authority |
+| T-M3-E-02 | Per-entry PutEvents failures, retry/timeout duplicate ID, atomic outbox/history rollback, restart recovery, crash after acceptance before mark, backoff and bounded repair; rollback emits nothing |
+| T-M3-E-03 | Cross-domain tenant filtering, no credentials in events; duplicates/out-of-order fixtures and authorized HTTP refetch |
+| T-M3-E-04 | One DLQ per target, policy/KMS correctness; permanent target failure retained, alarms visible, controlled redrive preserves detail ID |
+
+Local/stub tests prove protocol and transaction behavior. S3 lifecycle, actual
+cross-domain filtering, DLQ policies/KMS/alarms remain checkpoint-3/4 proofs.
 
 ## 12. Reproducible, disposable environments [Lab requirement]
 

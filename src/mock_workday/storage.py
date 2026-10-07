@@ -73,7 +73,12 @@ class Storage:
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
             )
-            client = session.client("s3", config=SDK_CONFIG)
+            client = session.client(
+                "s3",
+                config=SDK_CONFIG.merge(
+                    Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+                ),
+            )
             self.aws_sessions[key] = session
             self.secret_clients.pop(key, None)
             self.sessions[key] = (credentials["Expiration"], client)

@@ -409,7 +409,14 @@ def initiate(ctx, kind, body):
             assignees=assignees(ctx, event, key) if status != "SKIPPED" else [],
         )
     audit.process_history(
-        ctx.conn, ctx.p, event["id"], "INITIATE", None, event["comment"], ctx.now
+        ctx.conn,
+        ctx.p,
+        event["id"],
+        "INITIATE",
+        None,
+        event["comment"],
+        ctx.now,
+        request_id=ctx.request_id,
     )
     audit.object_record(
         ctx.conn,
@@ -557,7 +564,14 @@ def act(ctx, eid, action, body):
         completed=ctx.now if status != "IN_PROGRESS" else None,
     )
     audit.process_history(
-        ctx.conn, ctx.p, eid, action.upper(), current["step_key"], body.comment, ctx.now
+        ctx.conn,
+        ctx.p,
+        eid,
+        action.upper(),
+        current["step_key"],
+        body.comment,
+        ctx.now,
+        request_id=ctx.request_id,
     )
     audit.object_record(
         ctx.conn,

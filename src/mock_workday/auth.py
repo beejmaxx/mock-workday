@@ -83,6 +83,7 @@ class Principal:
     credential_version_id: UUID | None = None
     actor_account_id: UUID | None = None
     operations: frozenset[str] | None = None
+    expires_at: int | None = None
 
 
 def active_grant(conn, gid, now):
@@ -346,6 +347,7 @@ def authenticate(conn, tenant, authorization, now, storage=None):
             cid,
             gid,
             scopes,
+            expires_at=c["exp"],
             **extra,
         )
     except APIError as exc:

@@ -368,8 +368,8 @@ def test_T_M3_S_02_uncertain_commit_preserves_object(env, monkeypatch):
     original_tx = env.db.tenant_tx
 
     @contextmanager
-    def lost_ack(tid, *, owner=False):
-        with original_tx(tid, owner=owner) as conn:
+    def lost_ack(tid, *, owner=False, snapshot=False):
+        with original_tx(tid, owner=owner, snapshot=snapshot) as conn:
             yield conn
         raise APIError(503, "SERVICE_UNAVAILABLE")
 

@@ -598,3 +598,58 @@ ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,on_behalf_of_user_account_id) 
 ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,agent_id) REFERENCES agent_registrations(tenant_id,id);
 ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,asu_id) REFERENCES agent_system_users(tenant_id,id);
 ALTER TABLE bp_history ADD FOREIGN KEY (tenant_id,credential_version_id) REFERENCES credential_versions(tenant_id,id);
+
+-- M3 slice 2c: immutable snapshots and transactional notification intent.
+CREATE TABLE report_exports (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    account_id uuid NOT NULL,
+    client_id text,
+    grant_id uuid,
+    report text NOT NULL CHECK (report='worker-roster'),
+    filters jsonb NOT NULL,
+    row_count int NOT NULL CHECK (row_count BETWEEN 0 AND 10000),
+    byte_length int NOT NULL CHECK (byte_length BETWEEN 0 AND 16777216),
+    sha256 text NOT NULL,
+    object_key text NOT NULL,
+    content bytea,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    FOREIGN KEY (tenant_id,account_id) REFERENCES accounts(tenant_id,id),
+    FOREIGN KEY (tenant_id,client_id) REFERENCES api_clients(tenant_id,client_id),
+    FOREIGN KEY (tenant_id,grant_id) REFERENCES delegation_grants(tenant_id,id)
+);
+ALTER TABLE report_exports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE report_exports FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON report_exports
+    USING (tenant_id=current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id=current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON report_exports TO mw_app;
+
+ALTER TABLE bp_history ADD COLUMN request_id text;
+ALTER TABLE bp_history ADD COLUMN business_process_version int;
+ALTER TABLE bp_history ADD COLUMN resulting_status text;
+ALTER TABLE bp_history ADD UNIQUE (tenant_id,id);
+CREATE TABLE event_outbox (
+    tenant_id uuid NOT NULL REFERENCES tenants,
+    event_id uuid NOT NULL,
+    schema_version int NOT NULL CHECK (schema_version=1),
+    detail jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    attempt_count int NOT NULL DEFAULT 0 CHECK (attempt_count>=0),
+    next_attempt_at timestamptz NOT NULL,
+    published_at timestamptz,
+    last_error text,
+    PRIMARY KEY (tenant_id,event_id),
+    CHECK (detail @> jsonb_build_object(
+        'tenant_id',tenant_id::text,'event_id',event_id::text,'schema_version',1)),
+    FOREIGN KEY (tenant_id,event_id) REFERENCES bp_history(tenant_id,id)
+);
+CREATE INDEX outbox_due ON event_outbox(tenant_id,next_attempt_at,event_id) WHERE published_at IS NULL;
+ALTER TABLE event_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_outbox FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON event_outbox
+    USING (tenant_id=current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id=current_setting('app.tenant_id')::uuid);
+GRANT SELECT, INSERT ON event_outbox TO mw_app;
+GRANT UPDATE (attempt_count,next_attempt_at,published_at,last_error) ON event_outbox TO mw_app;

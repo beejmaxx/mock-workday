@@ -119,7 +119,7 @@ The test-admin app exists only with `MW_TEST_ADMIN=1` and uses port 8081. Its ro
 - Business-process POSTs require `Idempotency-Key`. Successful retries return the original receipt; current authorization controls protected fields, and revoked grants or disabled clients prevent replay.
 - One service process serves both ports. This small lab intentionally uses direct SQL and plain functions; pagination may inspect all candidate rows and is not optimized for large datasets.
 
-Other systems consume only the versioned HTTP contract and container image. There is no shared database or code interface.
+Other systems consume the versioned HTTP contract and container image, plus the approved v1 business notifications and API-issued short-lived report URLs. There is no shared database or code interface.
 
 ## Documents
 
@@ -343,3 +343,68 @@ AWS old secret material awaits owner cleanup, while local removal is attempted
 after commit. Credential hashes, keys and tokens never enter registry rows or
 request logs. Structured JSON request logs carry `X-Request-Id`; the 3-day
 CloudWatch retention/encryption and live IAM proofs belong to checkpoints 3–4.
+
+### M3 slice 2c: report exports and business notifications
+
+`POST /api/v1/report-exports` accepts
+`{"report":"worker-roster","include_compensation":false}` with optional
+`as_of`. It returns snapshot metadata and a GET-only download capability after
+current authorization and audit commit. The synchronous NDJSON report is capped
+at 10,000 rows / 16 MiB. Compensation appears only when both requested and
+permitted per row. See [the report contract](docs/spec.md#67-report-exports-m3-slice-2c).
+
+URLs last at most 60 seconds, further capped by token/grant/credential and AWS
+session expiry. Anyone holding one can reuse it until expiry; grant revocation
+does not instantly revoke it. Keep URLs out of logs and untrusted documents.
+AWS downloads go directly to S3 over HTTPS with no consumer AWS credentials.
+Local downloads use an HMAC-signed URL on the public app; restart invalidates
+outstanding local URLs. Creation responses and local downloads use `no-store`.
+The one-day S3 lifecycle backstop belongs to checkpoint 3. Locally, run the
+owner-only `uv run python -m mock_workday.reports --tenant UUID` to clear bodies
+older than one day; metadata/audit remains. Recreate the disposable database for
+this expanded schema; it is not an in-place migration.
+
+Business transitions now commit an outbox row with BP history and the existing
+idempotency receipt. The executable starts one dispatcher thread in the same
+service process. Set `MW_EVENT_BUS_ARN` only to the provisioned Mock Workday bus;
+without it, dispatch captures the most recent 1,000 notifications locally and
+makes no AWS call. Seed commands/app-factory tests never start dispatch or publish
+seeded history. The service IAM role will receive `events:PutEvents` only on its
+own bus in checkpoint 3. AWS service configuration must set the standard
+`AWS_DEFAULT_REGION=us-east-2` for boto3 and regional S3 signing.
+
+The [v1 event detail schema](docs/business-event-v1.schema.json) covers job-change
+submission/final approval and time-off final approval. Consumers deduplicate by
+`(tenant_id,event_id)` and tolerate out-of-order BP versions. Notifications carry
+no authority; consumers refetch through HTTP using current credentials. No
+compensation, comments, reasons, documents or capabilities are included. See
+[the outbox contract](docs/spec.md#57-business-notifications-and-transactional-outbox-m3-slice-2c).
+
+The outbox retries failed/unknown results with bounded exponential backoff.
+A crash after acceptance can repeat the same stable event ID. Structured logs
+report pending counts/oldest age. Owner repair commands preserve those IDs:
+
+```sh
+uv run python -m mock_workday.events --tenant UUID republish \
+  --start 2026-10-07T00:00:00+00:00 --end 2026-10-08T00:00:00+00:00
+uv run python -m mock_workday.events --tenant UUID prune
+```
+
+Repair is audited, limited to 100 history transitions over at most seven days,
+and schedules ordinary dispatcher delivery. Pruning removes only rows published
+more than seven days ago; pending intent never ages out. The approved provider
+DLQs, tenant-filtered cross-domain rules, encryption and alarms are Terraform
+checkpoint-3/4 work. The other domain owns its receiving bus and consumer queue.
+After fixing a target-delivery failure, an owner may explicitly run:
+
+```sh
+uv run python -m mock_workday.events --tenant UUID redrive --queue-url PROVIDER_DLQ_URL
+```
+
+This requires `MW_EVENT_BUS_ARN` and the owner role's narrowly scoped provider-DLQ
+receive/delete permissions. It reads at most ten messages, verifies schema,
+source/account/tenant and committed history, audits the attempt, and deletes only
+after confirmed republication. Unknown results remain for retry. Inspect DLQ
+failure attributes before redriving; no automatic redrive, SNS or consumer-side
+queue is added. A successful PutEvents result does not prove target delivery;
+checkpoint 4 must verify the bus exists and inspect target/DLQ behavior.

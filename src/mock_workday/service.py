@@ -1,3 +1,4 @@
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,6 +24,7 @@ class Context:
     now: datetime
     request_id: str
     uploaded_documents: list = field(default_factory=list)
+    uploaded_exports: list = field(default_factory=list)
 
     def not_found(self, target, *, action="READ"):
         version = one(
@@ -131,6 +133,8 @@ class Service:
         self.rate_limits = RateLimits()
         self.faults = Faults()
         self.cursor_secret = token_bytes(32)
+        self.export_secret = token_bytes(32)
+        self.event_capture = deque(maxlen=1000)
 
     def tenant(self, request):
         host = request.headers.get("host", "").split(":", 1)[0].lower()
@@ -144,13 +148,14 @@ class Service:
         return tenant
 
     @contextmanager
-    def request(self, request):
+    def request(self, request, *, snapshot=False):
         tenant = self.tenant(request)
         now = self.clock.now()
         uploaded = []
+        exports = []
         commit_started = False
         try:
-            with self.db.tenant_tx(tenant["id"]) as conn:
+            with self.db.tenant_tx(tenant["id"], snapshot=snapshot) as conn:
                 p = authenticate(
                     conn,
                     tenant,
@@ -191,7 +196,14 @@ class Service:
                 try:
                     start_faults(rules, conn)
                     yield Context(
-                        self, conn, tenant, p, now, request_id(request), uploaded
+                        self,
+                        conn,
+                        tenant,
+                        p,
+                        now,
+                        request_id(request),
+                        uploaded,
+                        exports,
                     )
                     timeout(rules, "timeout_before_commit")
                     commit_started = True
@@ -200,6 +212,10 @@ class Service:
         finally:
             # An uncertain COMMIT outcome may already have durable metadata.
             if not commit_started:
+                from .reports import cleanup_export
+
+                for export_id in exports:
+                    cleanup_export(self.storage, tenant, export_id, request_id(request))
                 for document_id in uploaded:
                     self.storage.cleanup(
                         tenant, document_id, request_id=request_id(request)

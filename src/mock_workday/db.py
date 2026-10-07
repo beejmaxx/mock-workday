@@ -24,9 +24,11 @@ class Database:
         self.owner = create_engine(owner_url) if owner_url is not None else None
 
     @contextmanager
-    def tenant_tx(self, tenant_id, *, owner=False):
+    def tenant_tx(self, tenant_id, *, owner=False, snapshot=False):
         engine = self.owner if owner else self.app
         with engine.begin() as conn:
+            if snapshot:
+                conn.exec_driver_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             run(
                 conn,
                 "SELECT set_config('app.tenant_id', :tid, true)",

@@ -90,6 +90,7 @@ def database(tmp_path_factory):
 def local_storage(monkeypatch, tmp_path):
     # A developer's deployment environment must never turn pytest into live AWS work.
     monkeypatch.setenv("MW_CREDENTIAL_STORE", str(tmp_path / "credentials.json"))
+    monkeypatch.delenv("MW_EVENT_BUS_ARN", raising=False)
     monkeypatch.delenv("MW_TENANT_STORAGE", raising=False)
     monkeypatch.delenv("MW_TENANT_DATA_ROLE_ARN", raising=False)
 
