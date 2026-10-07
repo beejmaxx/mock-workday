@@ -287,6 +287,25 @@ No resource was tagged, deleted or otherwise changed. Evidence:
 **25 tests**, including untagged NAT, EIP, load balancer, EBS, RDS and secret
 failure cases. Ruff and `git diff --check` passed. Checkpoint 4 remains accepted.
 
+### Local-only lifecycle hardening
+
+Following the observed ACM detach race, TLS cleanup now makes at most six
+DeleteCertificate attempts with 2/4/8/16/30-second backoff, surfaces AWS error
+codes, and preserves private files/inventory/tfvars on failure. Already-absent
+certificates are safe to clean locally. Up/down support explicit hands-off mode
+via `--yes` or `MW_ALLOWED_CIDR`, with detected direct-egress `/32` validation and
+Terraform auto-approval; interactive remains the default. See decision D54.
+
+Validation was **local only; no AWS calls, Terraform operations or deployment**.
+`uv run --frozen pytest tests/test_aws_script.py tests/test_m3_infra.py
+ tests/test_leftovers.py -q` passed **48 tests**. External commands in shell tests
+were replaced with local stubs. Cases cover retry success/exhaustion, error-code
+reporting, permission/attachment refusals, retained TLS files, missing
+certificates, account/CIDR/flag/EOF refusal, and interactive/non-interactive
+up/down/plan. An initial test caught Bash 3.2's empty-array/nounset behavior;
+using explicit input-mode arguments fixed it. `bash -n`, Ruff and
+`git diff --check` passed. Live validation of these new paths was not performed.
+
 Local evidence is in ignored `.local/m3-checkpoint4-*.log`, `m3-*-probes*.log`,
 `m3-deployment.json`, `m3-s3-seed-inventory.json`, `m3-kms-cloudtrail.json`,
 `m3-observability.json`, `.local/m3-leftovers-owned-scope*.log`, and specific

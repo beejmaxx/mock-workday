@@ -7,6 +7,19 @@ REGISTRY="$ROOT/infra/envs/dev/registry"
 SERVICE="$ROOT/infra/envs/dev/service"
 VARS="$ROOT/.local/aws-dev.tfvars.json"
 
+ACTION="${1:-}"
+# A nonempty array also works with nounset in macOS Bash 3.2.
+AUTO_APPROVE=(-input=true)
+NONINTERACTIVE=false
+if [[ "${MW_ALLOWED_CIDR+x}" == x ]]; then NONINTERACTIVE=true; fi
+if [[ "${2:-}" == --yes && $# == 2 ]]; then
+  NONINTERACTIVE=true
+elif [[ $# -gt 1 ]]; then
+  echo "Usage: $0 {plan|up|smoke|down|leftovers} [--yes]" >&2
+  exit 2
+fi
+if $NONINTERACTIVE; then AUTO_APPROVE=(-input=false -auto-approve); fi
+
 check_account() {
   local account
   account="$(aws sts get-caller-identity --query Account --output text </dev/null)"
@@ -20,8 +33,16 @@ configure() {
   mkdir -p "$ROOT/.local"
   local current_ip cidr tag
   current_ip="$(curl --noproxy "*" -fsS --max-time 10 https://checkip.amazonaws.com)"
-  read -r -p "Allowed IPv4 /32 [${current_ip}/32]: " cidr
-  cidr="${cidr:-${current_ip}/32}"
+  if $NONINTERACTIVE; then
+    cidr="${current_ip}/32"
+    if [[ "${MW_ALLOWED_CIDR+x}" == x && "$MW_ALLOWED_CIDR" != "$cidr" ]]; then
+      echo "MW_ALLOWED_CIDR must match detected direct egress $cidr; refusing." >&2
+      exit 1
+    fi
+  else
+    read -r -p "Allowed IPv4 /32 [${current_ip}/32]: " cidr
+    cidr="${cidr:-${current_ip}/32}"
+  fi
   tag="${MW_IMAGE_TAG:-$(git -C "$ROOT" rev-parse --short=12 HEAD)}"
   python3 - "$VARS" "$cidr" "$tag" <<'PY'
 import ipaddress, json, sys
@@ -42,7 +63,7 @@ initialize() {
   terraform -chdir="$1" init -input=false
 }
 
-case "${1:-}" in
+case "$ACTION" in
   plan)
     umask 077
     check_account
@@ -50,17 +71,17 @@ case "${1:-}" in
     initialize "$REGISTRY"
     terraform -chdir="$REGISTRY" fmt -check
     terraform -chdir="$REGISTRY" validate
-    terraform -chdir="$REGISTRY" plan -out="$ROOT/.local/m3-registry.tfplan"
+    terraform -chdir="$REGISTRY" plan "${AUTO_APPROVE[0]}" -out="$ROOT/.local/m3-registry.tfplan"
     initialize "$SERVICE"
     terraform -chdir="$SERVICE" fmt -check
     terraform -chdir="$SERVICE" validate
-    terraform -chdir="$SERVICE" plan -var-file="$VARS" -out="$ROOT/.local/m3-service.tfplan"
+    terraform -chdir="$SERVICE" plan "${AUTO_APPROVE[0]}" -var-file="$VARS" -out="$ROOT/.local/m3-service.tfplan"
     ;;
   up)
     check_account
     configure
     initialize "$REGISTRY"
-    terraform -chdir="$REGISTRY" apply
+    terraform -chdir="$REGISTRY" apply "${AUTO_APPROVE[@]}"
     repository="$(terraform -chdir="$REGISTRY" output -raw repository_url)"
     tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image_tag"])' "$VARS")"
     # Preserve piped approval answers; docker login reads only the ECR password pipe.
@@ -69,7 +90,7 @@ case "${1:-}" in
     docker push "$repository:$tag" </dev/null
     initialize "$SERVICE"
     uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" enroll
-    terraform -chdir="$SERVICE" apply -var-file="$VARS"
+    terraform -chdir="$SERVICE" apply "${AUTO_APPROVE[@]}" -var-file="$VARS"
     uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" store
     python3 "$ROOT/infra/scripts/migrate.py"
     ;;
@@ -82,7 +103,7 @@ case "${1:-}" in
     [[ -f "$VARS" ]] || configure
     initialize "$SERVICE"
     python3 "$ROOT/infra/scripts/prepare_down.py"
-    terraform -chdir="$SERVICE" destroy -var-file="$VARS"
+    terraform -chdir="$SERVICE" destroy "${AUTO_APPROVE[@]}" -var-file="$VARS"
     uv run --project "$ROOT" --frozen python "$ROOT/infra/scripts/tls.py" cleanup
     python3 "$ROOT/infra/scripts/leftovers.py"
     ;;
@@ -90,5 +111,5 @@ case "${1:-}" in
     check_account
     python3 "$ROOT/infra/scripts/leftovers.py"
     ;;
-  *) echo "Usage: $0 {plan|up|smoke|down|leftovers}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {plan|up|smoke|down|leftovers} [--yes]" >&2; exit 2 ;;
 esac

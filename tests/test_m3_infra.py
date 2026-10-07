@@ -1,6 +1,9 @@
 import importlib
 import json
 import stat
+import subprocess
+
+import pytest
 from pathlib import Path
 
 from cryptography import x509
@@ -61,3 +64,69 @@ def test_T_M3_N_01_owner_tls_custody_and_cleanup(tmp_path, monkeypatch):
     tls.cleanup()
     assert not list(directory.iterdir())
     assert json.loads(variables.read_text())["private_certificate_arn"] is None
+
+
+@pytest.mark.parametrize(
+    "code,in_use,succeeds,attempts",
+    [
+        ("ResourceInUseException", [], True, 2),
+        ("ResourceInUseException", ["listener"], True, 2),
+        ("InternalFailure", [], True, 2),
+        ("InternalFailure", ["listener"], False, 1),
+        ("AccessDeniedException", [], False, 1),
+        ("ResourceInUseException", [], False, 6),
+        ("ResourceNotFoundException", [], True, 1),
+    ],
+)
+def test_T_M3_N_01_tls_cleanup_retry_and_refusal(
+    tmp_path, monkeypatch, capsys, code, in_use, succeeds, attempts
+):
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "infra/scripts")
+    )
+    tls = importlib.import_module("tls")
+    directory = tmp_path / "tls"
+    directory.mkdir()
+    (directory / "inventory.json").write_text('{"certificate_arn":"cert"}')
+    (directory / "leaf.key").write_text("private-sentinel")
+    variables = tmp_path / "vars.json"
+    variables.write_text('{"private_certificate_arn":"cert"}')
+    monkeypatch.setattr(tls, "DIRECTORY", directory)
+    monkeypatch.setattr(tls, "VARS", variables)
+    deletes = []
+    sleeps = []
+
+    def aws(*args):
+        if args[1] == "describe-certificate":
+            return {"Certificate": {"InUseBy": in_use}}
+        deletes.append(args)
+        if (
+            succeeds
+            and len(deletes) == attempts
+            and code != "ResourceNotFoundException"
+        ):
+            return {}
+        raise subprocess.CalledProcessError(
+            254,
+            "aws",
+            stderr=f"An error occurred ({code}) when calling DeleteCertificate: private-sentinel",
+        )
+
+    monkeypatch.setattr(tls, "aws", aws)
+    monkeypatch.setattr(tls.time, "sleep", sleeps.append)
+    if succeeds:
+        tls.cleanup()
+        assert not list(directory.iterdir())
+        assert json.loads(variables.read_text())["private_certificate_arn"] is None
+    else:
+        with pytest.raises(SystemExit, match=code):
+            tls.cleanup()
+        assert (directory / "leaf.key").read_text() == "private-sentinel"
+        assert (directory / "inventory.json").exists()
+        assert json.loads(variables.read_text())["private_certificate_arn"] == "cert"
+    assert len(deletes) == attempts
+    assert sleeps == [2, 4, 8, 16, 30][: attempts - 1]
+    output = capsys.readouterr().err
+    assert "private-sentinel" not in output
+    if sleeps:
+        assert code in output

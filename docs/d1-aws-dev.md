@@ -61,6 +61,14 @@ These are the only code changes, and the local workflow must keep working unchan
 | `make aws-down` | Destroy `service` only; then run the leftover check |
 | `make aws-leftovers` | List anything billable or tagged `Project=mock-workday` that remains. Check load balancers, target groups, ECS services and tasks, RDS instances and snapshots, NAT gateways, Elastic IPs, unattached ENIs, EBS volumes, Secrets Manager secrets (including pending deletion), and log groups. Check `us-east-2`, plus CloudWatch Logs in `us-east-1`. Exit nonzero for Mock Workday-owned leftovers, unknown-owner cost-bearing resources or inventory errors; report other `lab=agent-runtime` owners with tags as information (M3 decision D53). |
 
+**Lab policy — hands-off operation:** interactive remains the default. After
+review approval, `aws.sh up --yes` / `down --yes`, or setting `MW_ALLOWED_CIDR`,
+selects Terraform `-input=false -auto-approve`. When configuration is needed,
+use the freshly detected direct egress IPv4 `/32`; an environment CIDR must
+match it exactly, otherwise stop before Terraform. Down reuses existing tfvars.
+Wrong accounts, malformed IPs, unknown flags and interactive EOF fail closed.
+Local tests replace every external command; no AWS calls are required.
+
 The README gets an "AWS dev" section: prerequisites, the commands above, approximate hourly cost, and a reminder to run `make aws-down`.
 
 ## Cost (approximate, while the service stack is up)
@@ -133,3 +141,4 @@ Expected persistent registry/platform resources remain exempt.
 | Test | Behavior |
 |---|---|
 | T-D1-05 | Stale tag-only resources, INACTIVE task-definition tags and STOPPED tasks do not fail the leftover check; Mock Workday-owned resources still fail (tags or names), S1-tagged resources are informational with owner tags, and inventory errors cannot report success (mocked AWS responses) |
+| T-D1-06 | Stubbed up/down/plan verify opt-in hands-off mode, detected exact IPv4 /32, preserved interactive default, and refusal on account/CIDR/argument errors or interactive EOF; no AWS calls |

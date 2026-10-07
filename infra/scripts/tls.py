@@ -4,6 +4,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import subprocess
+import sys
+import time
 from datetime import UTC, datetime, timedelta
 
 from cryptography import x509
@@ -154,15 +158,59 @@ def store():
     )
 
 
+def aws_error_code(error):
+    match = re.search(r"An error occurred \(([^)]+)\)", error.stderr or "")
+    return match[1] if match else f"AWSCLIExit{error.returncode}"
+
+
+def delete_certificate(arn):
+    delays = (2, 4, 8, 16, 30)
+    for attempt in range(len(delays) + 1):
+        try:
+            aws("acm", "delete-certificate", "--certificate-arn", arn)
+            return
+        except subprocess.CalledProcessError as error:
+            code = aws_error_code(error)
+            if code == "ResourceNotFoundException":
+                return
+            # Permissions and malformed requests cannot recover by waiting.
+            if code in {
+                "AccessDenied",
+                "AccessDeniedException",
+                "InvalidArnException",
+                "ValidationException",
+            } or code.startswith("AWSCLIExit"):
+                raise SystemExit(f"ACM DeleteCertificate failed: {code}") from None
+            try:
+                certificate = aws(
+                    "acm", "describe-certificate", "--certificate-arn", arn
+                )["Certificate"]
+            except subprocess.CalledProcessError as describe_error:
+                describe_code = aws_error_code(describe_error)
+                if describe_code == "ResourceNotFoundException":
+                    return
+                raise SystemExit(
+                    f"ACM DescribeCertificate failed: {describe_code}; DeleteCertificate: {code}"
+                ) from None
+            if code != "ResourceInUseException" and certificate["InUseBy"]:
+                raise SystemExit(
+                    f"ACM DeleteCertificate failed: {code}; certificate still attached"
+                ) from None
+            if attempt == len(delays):
+                raise SystemExit(
+                    f"ACM DeleteCertificate failed after {attempt + 1} attempts: {code}; local TLS files retained"
+                ) from None
+            print(
+                f"ACM DeleteCertificate: {code}; retry in {delays[attempt]}s",
+                file=sys.stderr,
+            )
+            time.sleep(delays[attempt])
+
+
 def cleanup():
     inventory = DIRECTORY / "inventory.json"
     if inventory.exists():
-        aws(
-            "acm",
-            "delete-certificate",
-            "--certificate-arn",
-            json.loads(inventory.read_text())["certificate_arn"],
-        )
+        delete_certificate(json.loads(inventory.read_text())["certificate_arn"])
     for name in (
         "inventory.json",
         "ca.key",

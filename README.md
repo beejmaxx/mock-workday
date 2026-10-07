@@ -168,6 +168,28 @@ make aws-down       # interactive destroy of SERVICE ONLY, then leftover invento
 make aws-leftovers  # read-only inventory; nonzero if leftovers remain
 ```
 
+After the deployment has been approved, hands-off commands are available:
+
+```sh
+bash infra/scripts/aws.sh up --yes
+bash infra/scripts/aws.sh down --yes
+# Alternatively, explicitly supply the current detected direct egress /32:
+MW_ALLOWED_CIDR=203.0.113.7/32 make aws-up  # replace with your actual direct IP
+MW_ALLOWED_CIDR=203.0.113.7/32 make aws-down
+```
+
+`--yes` or a set `MW_ALLOWED_CIDR` skips CIDR/Terraform prompts and enables
+`-input=false -auto-approve` for apply/destroy. Configuration always detects the
+direct egress IPv4 and uses its `/32`; a supplied CIDR must match exactly (empty,
+stale or wider values are refused). Down reuses existing tfvars; it only detects
+an address when those inputs are missing. Account checks still run. Interactive
+mode remains the default, and these switches do not replace deployment review.
+
+TLS cleanup retries ACM deletion up to six times, waiting 2/4/8/16/30 seconds
+between attempts after a detach race. It prints AWS error codes, stops on
+permission/invalid-request failures, and retains local TLS files and the ARN
+until deletion succeeds (an already-absent certificate is success).
+
 API requests must bypass HTTP proxies: the `Host` header selects the tenant, and
 an HTTP proxy may rewrite it and break tenant routing. For manual requests, use
 `curl --noproxy "*"` and `-H 'Host: acme.mockworkday.local'`. IP detection also uses

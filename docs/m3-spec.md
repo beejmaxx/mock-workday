@@ -1153,6 +1153,22 @@ and must be tested as an isolated synthetic-tenant scenario at checkpoint 4.
    7-day deletion after encrypted resource cleanup. Remove local lab CA/leaf
    private files. A fresh deployment gets fresh keys and deterministic seed IDs.
 
+**[Lab policy]** Owner TLS cleanup tolerates ACM detachment propagation: try
+DeleteCertificate at most six times with 2/4/8/16/30-second backoff. Retry when
+ACM returns ResourceInUseException, or when a failed deletion's subsequent
+DescribeCertificate shows no InUseBy attachments. Permission/invalid-request
+errors and unparsed CLI failures stop immediately; failed inspection also stops.
+Already-absent certificates count as deleted. Surface the AWS error code without
+printing potentially sensitive stderr text. Exhaustion is nonzero; preserve
+local inventory, private files and tfvars ARN until deletion succeeds.
+
+**[Lab policy]** Approved up/down operations can opt into prompt-free Terraform
+apply/destroy using `--yes` or `MW_ALLOWED_CIDR`. Interactive stays the default.
+The flag uses the detected direct egress IPv4 `/32`; a supplied environment CIDR
+must exactly match that detected value whenever configuration runs. Down reuses
+existing tfvars. This option consumes the existing deployment approval; it is
+not a substitute for checkpoint review. Account and IPv4 `/32` checks remain.
+
 **[Lab policy]** `aws-leftovers` uses service inventories, preserving D1's stale
 tag handling. Both `aws-down` and `aws-leftovers` fail for Mock Workday-owned
 resources and unattributed cost-bearing resources in the enumerated D1/M3 classes: ownership is
@@ -1301,6 +1317,7 @@ blocker. The implemented contract changes slice by slice at checkpoint 2.
 | D51 — F: Null imported-certificate ARN stages provider NLB; owner enrollment supplies the ARN for TLS activation | Terraform-generated private keys in state; dummy deployable certificate | Preserves the approved custody boundary and makes the activation step reviewable without paid changes at checkpoint 3 |
 | D52 — C/H: Exact configured owner principal (IAM user or role in the provider account) for enrollment/cleanup, tagged role for data, separate bootstrap task role | Give the API task owner storage/secret permissions | Keeps app access read-only for credentials and excludes unrelated same-account identities from bucket reads/inventory and secret access; validates an exact ARN without wildcards and does not modify the operator IAM identity |
 | D53 — E: Owner-scoped teardown verdict, with other owners and their tags reported separately (lab policy) | Fail on all account resources or delete unrelated resources to obtain a clean result | Concurrent S1 work and permanent platform infrastructure have independent owners/lifecycles; service existence plus own tags/names preserves cleanup accountability without disrupting them. Unknown-owner cost-bearing resources and inventory errors still fail, while stale tag entries and scheduled KMS deletion remain explicit information |
+| D54 — E/F: Explicit hands-off CLI mode and bounded owner ACM cleanup retries | Pipe prompt answers; require manual certificate cleanup retries | Opt-in flags retain interactive defaults/account and CIDR checks; bounded retries tolerate detach propagation while preserving credentials on failure and reporting AWS error codes |
 
 
 **[Lab policy]** Slice 2d implementation details and response shapes are now in
