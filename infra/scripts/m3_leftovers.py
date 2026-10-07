@@ -5,10 +5,10 @@ from common import aws
 PREFIX = "mock-workday-dev"
 
 
-def inventory(record):
+def inventory(record, owned):
     for bucket in aws("s3api", "list-buckets")["Buckets"]:
         name = bucket["Name"]
-        if name.startswith("mw-729608197929-"):
+        if owned("arn:aws:s3:::" + name):
             record("tenant bucket", name)
             for action, field in [
                 ("list-object-versions", "Versions"),
@@ -28,14 +28,13 @@ def inventory(record):
         if key["KeyManager"] != "CUSTOMER":
             continue
         tags = aws("kms", "list-resource-tags", "--key-id", item["KeyId"])["Tags"]
-        if not any(
-            t["TagKey"] == "Project" and t["TagValue"] == "mock-workday" for t in tags
-        ):
+        if not owned(key["Arn"], {t["TagKey"]: t["TagValue"] for t in tags}):
+            record("KMS key", key["Arn"], {t["TagKey"]: t["TagValue"] for t in tags})
             continue
         if key["KeyState"] == "PendingDeletion":
             print("PENDING DELETION (nonbillable)", key["Arn"], key["DeletionDate"])
         else:
-            record("KMS key", key["Arn"])
+            record("KMS key", key["Arn"], {t["TagKey"]: t["TagValue"] for t in tags})
     for alias in aws("kms", "list-aliases")["Aliases"]:
         if alias["AliasName"].startswith("alias/" + PREFIX):
             record("KMS alias", alias["AliasName"])
@@ -46,8 +45,7 @@ def inventory(record):
             "--certificate-arn",
             cert["CertificateArn"],
         )["Tags"]
-        if any(t["Key"] == "Project" and t["Value"] == "mock-workday" for t in tags):
-            record("ACM certificate", cert["CertificateArn"])
+        record("ACM certificate", cert["CertificateArn"], tags)
     for zone in aws("route53", "list-hosted-zones")["HostedZones"]:
         tags = aws(
             "route53",
@@ -57,8 +55,8 @@ def inventory(record):
             "--resource-id",
             zone["Id"].split("/")[-1],
         )["ResourceTagSet"]["Tags"]
-        if any(t["Key"] == "Project" and t["Value"] == "mock-workday" for t in tags):
-            record("hosted zone", zone["Id"])
+        record("hosted zone", zone["Id"], tags)
+        if owned(zone["Name"], tags):
             print(
                 "INFO zone associations",
                 aws("route53", "get-hosted-zone", "--id", zone["Id"]).get("VPCs", []),
@@ -66,27 +64,28 @@ def inventory(record):
     for service in aws("ec2", "describe-vpc-endpoint-service-configurations")[
         "ServiceConfigurations"
     ]:
-        if any(
-            t["Key"] == "Project" and t["Value"] == "mock-workday"
-            for t in service.get("Tags", [])
-        ):
-            record("endpoint service", service["ServiceId"])
+        record("endpoint service", service["ServiceId"], service.get("Tags", []))
+        if owned(service["ServiceId"], service.get("Tags", [])):
             for connection in aws(
                 "ec2",
                 "describe-vpc-endpoint-connections",
                 "--filters",
                 f"Name=service-id,Values={service['ServiceId']}",
             )["VpcEndpointConnections"]:
-                record(
-                    "consumer endpoint connection (other owner)",
+                print(
+                    "INFO consumer endpoint connection (other owner):",
                     connection["VpcEndpointId"],
+                    "owner:",
+                    connection.get("VpcEndpointOwner"),
                 )
-    for bus in aws("events", "list-event-buses", "--name-prefix", PREFIX)["EventBuses"]:
+    for bus in aws("events", "list-event-buses")["EventBuses"]:
         record("event bus", bus["Arn"])
         for rule in aws("events", "list-rules", "--event-bus-name", bus["Name"])[
             "Rules"
         ]:
             record("event rule", rule["Arn"])
+            if not owned(rule["Arn"]):
+                continue
             print(
                 "INFO event targets",
                 aws(
@@ -98,10 +97,11 @@ def inventory(record):
                     rule["Name"],
                 )["Targets"],
             )
-    for queue in aws("sqs", "list-queues", "--queue-name-prefix", PREFIX).get(
-        "QueueUrls", []
-    ):
-        record("provider DLQ", queue)
+    for queue in aws("sqs", "list-queues").get("QueueUrls", []):
+        tags = aws("sqs", "list-queue-tags", "--queue-url", queue).get("Tags", {})
+        record("provider DLQ", queue, tags)
+        if not owned(queue, tags):
+            continue
         print(
             "INFO DLQ",
             aws(
@@ -113,16 +113,12 @@ def inventory(record):
                 "ApproximateNumberOfMessages",
             )["Attributes"],
         )
-    for alarm in aws("cloudwatch", "describe-alarms", "--alarm-name-prefix", PREFIX)[
-        "MetricAlarms"
-    ]:
+    for alarm in aws("cloudwatch", "describe-alarms")["MetricAlarms"]:
         record("alarm", alarm["AlarmArn"])
-    for dashboard in aws(
-        "cloudwatch", "list-dashboards", "--dashboard-name-prefix", PREFIX
-    )["DashboardEntries"]:
+    for dashboard in aws("cloudwatch", "list-dashboards")["DashboardEntries"]:
         record("dashboard", dashboard["DashboardArn"])
     for acl in aws("wafv2", "list-web-acls", "--scope", "REGIONAL")["WebACLs"]:
-        if acl["Name"].startswith(PREFIX):
+        if owned(acl["ARN"]):
             record("WAF ACL", acl["ARN"])
             print(
                 "INFO WAF associations",
@@ -131,8 +127,8 @@ def inventory(record):
                 ],
             )
     for role in aws("iam", "list-roles")["Roles"]:
-        if role["RoleName"].startswith(PREFIX):
-            record("service IAM role", role["Arn"])
+        tags = aws("iam", "list-role-tags", "--role-name", role["RoleName"])["Tags"]
+        record("service IAM role", role["Arn"], tags)
     metrics = aws("cloudwatch", "list-metrics", "--namespace", "MockWorkday")["Metrics"]
     print(
         "INFO historical EMF series (cannot delete; not evidence of active publishing):",

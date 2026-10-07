@@ -1589,7 +1589,7 @@ cross-domain filtering, DLQ policies/KMS/alarms remain checkpoint-3/4 proofs.
 | T-M3-AI-04 | Mid-call identity/grant/object revocation discards answer but charges usage; append-only attribution audit; no prompt/answer/credentials in logs |
 | T-M3-AI-05 | Deterministic fake and no AWS in tests; stubbed exact Converse profile/config; approved live smoke later verifies IAM/regions/model access without fallback |
 | T-M3-N-01 / T-M3-DNS-01 | Private/public transport aliases preserve canonical token identity; unknown/cross-tenant hosts fail; live DNS/CA/endpoint proofs follow at checkpoint 4 |
-| T-M3-DOWN-01 | M3 owned-resource inventory, explicit pending key-deletion dates and failure on unreadable inventories; live teardown follows at checkpoint 4 |
+| T-M3-DOWN-01 | M3 owned-resource inventory (own tags or names), other lab owners informational with tags, explicit pending key-deletion dates and failure on unreadable inventories; live teardown follows at checkpoint 4 |
 | T-M3-M-01 | Valid EMF JSON, units, wall time, exact dimensions and 20 baseline series; deployment plan later proves dashboard/alarms/retention and metric-history leftovers |
 
 
@@ -1605,7 +1605,7 @@ All data is synthetic, so every environment must be disposable: destroying it lo
   - Terraform state lives outside the destroyed environment: local state (gitignored) initially, a remote backend later if useful.
   - Every resource carries `Project=mock-workday` and `Environment=<name>` tags.
   - Wrappers: create, deploy, migrate and seed, run acceptance tests against the deployment, destroy.
-  - A leftover check after destroy lists tagged resources and common cost leaks: load balancers, NAT gateways, EBS volumes, Elastic IPs, RDS instances and snapshots, CloudWatch log groups.
+  - **Lab policy (M3 D53):** Both down/leftovers inventory fail only on Mock Workday-owned resources (own tags or names) and inventory errors. Other `lab=agent-runtime` owners are listed separately with tags, without failing; S1 and permanent platform cost-guard logs are expected. Stale tag-only entries and KMS pending deletion remain informational. The existing enumerated D1/M3 resource scope is unchanged. A leftover check after destroy lists tagged resources and common cost leaks: load balancers, NAT gateways, EBS volumes, Elastic IPs, RDS instances and snapshots, CloudWatch log groups.
   - Prefer resources that cost nothing when idle. Anything always-on and billable is called out in the README with its approximate cost.
   - Respect the account's constraints: the selected Region (`us-east-2`), the account plan's supported services, and any spend limit.
 

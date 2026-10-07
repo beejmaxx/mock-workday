@@ -4,10 +4,11 @@
 Mock Workday evidence, not a claim about Workday infrastructure. Deployment used
 approved commit `5fa0502` in account `729608197929`, Ohio, with profile
 `agent-runtime` and verified caller `arn:aws:iam::729608197929:user/lab-operator-cli`.
-**Checkpoint 4 is blocked at the clean-inventory gate:** all Mock Workday
-service resources were torn down, but the unchanged account-wide leftover check
-reports five resources owned by the runtime/platform team. No ownership-filter
-change or deletion of those resources was attempted.
+**Checkpoint 4 is accepted.** The reviewer accepted the live evidence in
+`d8e886d` and approved owner-scoped cleanup (M3 decision D53). Mock Workday has
+no active service leftovers; S1 resources and permanent platform cost-guard
+infrastructure belong to other owners and remain informational with their tags.
+The six scheduled KMS deletions below remain explicit.
 
 Public domain and all consumer inputs remained unset. No platform resources were
 changed, and `/admin/reset` was never called.
@@ -199,7 +200,8 @@ removed its pending-deletion key from managed state. TLS cleanup succeeded on
 retry. The next `make aws-down` confirmed **0 resources left to destroy**, then
 failed its account-wide inventory on the five entries below. The independent
 `make aws-leftovers` repeated the same five-resource failure (non-zero exit).
-`terraform state list` returned no entries. This is **not a clean command verdict** and checkpoint 4 must not be marked fully accepted.
+`terraform state list` returned no entries. That original command verdict was
+non-clean; the reviewer-approved resolution and successful recheck follow below.
 
 | Remaining account resource | Ownership evidence |
 |---|---|
@@ -209,12 +211,45 @@ failed its account-wide inventory on the five entries below. The independent
 | Log group `/lab/s1/dns` | `lab=agent-runtime`, `experiment=s1` |
 | Log group `/aws/lambda/lab-dev-cost-guard` | `Project=lab-platform`, `Stack=cost-guard`, `lab=agent-runtime` |
 
-These are outside this deployment and were not changed. The legacy D1 inventory
-is account-wide, so it cannot return clean while these exist. Resolving this
-requires either their owner's cleanup or a separately reviewed decision to scope
-the checker to Mock Workday ownership while retaining an informational external
-inventory. The user requested stopping on design changes, so no checker changes
-were made.
+These are outside this deployment and were not changed. The reviewer confirmed
+four belonged to the live S1 experiment and the cost-guard log group is permanent
+platform infrastructure. Decision D53 scopes the verdict to Mock Workday ownership
+while preserving other-owner visibility and failure on inventory errors.
+
+The updated shared checker is used by both `aws-down` and `aws-leftovers`.
+It uses native service existence checks plus `Project=mock-workday` or service
+name prefixes for the failure verdict. The separate **OTHER OWNERS** section
+prints all returned `lab=agent-runtime` entries with owner tags; it also includes
+the broader informational tag index, whose entries may be stale. No claim is made
+that all index-only entries represent live resources.
+
+During this update, an initial attempt also queried the tagging API in Virginia.
+`tag:GetResources` was explicitly denied by SCP `p-6u76e4dy`; the command exited
+nonzero. The implementation was corrected to retain D1's Ohio inventory plus
+Virginia **Logs only**, reading log tags through the Logs API. No IAM or SCP
+changes were made and no inventory error was suppressed.
+
+The final live `make aws-leftovers` completed at **2026-10-07 22:09:53 UTC**
+(2026-10-08 06:09:53 Asia/Shanghai) with **exit 0**, **0 REMAINS** entries,
+**6 PendingDeletion** keys, and **63 informational other-owner entries** with
+owner tags: 57 tagged `experiment=s1`, six platform cost-guard entries. All five
+original blockers appear in that informational section. The broader count also
+includes native IAM role tags and tag-index-only resources, not just the five
+original billable-resource findings. Final output:
+
+```text
+No disposable/billable leftovers found for Mock Workday. Pending KMS deletions, if any, remain inventoried above. Platform state, network, SSM and registry are intentionally retained.
+```
+
+No AWS resources were changed for this follow-up. The previous successful destroy
+stands; `aws-down` invokes this same checker. Acceptance is for the approved
+provider-only scope: consumer-dependent checks described above remain unverified.
+
+Local verification: `uv run --frozen pytest tests/test_leftovers.py tests/test_m3_infra.py -q` passed **19 tests**; Ruff and `git diff --check` passed.
+Coverage includes S1-tagged resources being informational with tags, Mock
+Workday-tagged resources failing, untagged owned names, name boundaries, an
+owned bucket outside the naming prefix, stale tag entries, native other-owner
+tags absent from the index, and failure on inventory/tag-read errors.
 
 The Mock Workday inventory found no active service resources. Local TLS files are
 gone and `private_certificate_arn` is null. Six service-owned keys remain as
@@ -235,6 +270,7 @@ intentional exemptions; their storage costs are not asserted to be zero.
 
 Local evidence is in ignored `.local/m3-checkpoint4-*.log`, `m3-*-probes*.log`,
 `m3-deployment.json`, `m3-s3-seed-inventory.json`, `m3-kms-cloudtrail.json`,
-`m3-observability.json`, and specific WAF/expiry/deletion logs. These artifacts
+`m3-observability.json`, `.local/m3-leftovers-owned-scope*.log`, and specific
+WAF/expiry/deletion logs. These artifacts
 are not published because raw infrastructure outputs and signed capabilities
 need separate handling. The sanitized results above are the committed evidence.

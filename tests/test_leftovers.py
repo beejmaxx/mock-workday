@@ -88,16 +88,20 @@ def test_T_D1_05_live_tasks_fail(inventory, status):
     responses["ecs", "list-clusters"]["clusterArns"] = ["cluster"]
     responses["ecs", "list-tasks"]["taskArns"] = ["task"]
     responses["ecs", "describe-tasks"]["tasks"] = [
-        {"taskArn": "task", "lastStatus": status}
+        {
+            "taskArn": "task",
+            "lastStatus": status,
+            "tags": [{"key": "Project", "value": "mock-workday"}],
+        }
     ]
     with pytest.raises(SystemExit, match=r"1 resource\(s\) remain"):
         leftovers.main()
 
 
-def test_T_D1_05_untagged_billable_resource_fails(inventory):
+def test_T_D1_05_untagged_owned_name_fails(inventory):
     leftovers, responses = inventory
     responses["rds", "describe-db-instances"]["DBInstances"] = [
-        {"DBInstanceIdentifier": "database"}
+        {"DBInstanceIdentifier": "mock-workday-dev"}
     ]
     with pytest.raises(SystemExit, match=r"1 resource\(s\) remain"):
         leftovers.main()
@@ -145,3 +149,127 @@ def test_T_M3_DOWN_01_unreadable_m3_inventory_cannot_report_clean(inventory):
     del responses["kms", "list-keys"]
     with pytest.raises(KeyError):
         leftovers.main()
+
+
+@pytest.mark.parametrize("project, fails", [("s1", False), ("mock-workday", True)])
+def test_T_D1_05_owner_scope(inventory, capsys, project, fails):
+    leftovers, responses = inventory
+    tags = {"lab": "agent-runtime"}
+    tags.update({"experiment": "s1"} if project == "s1" else {"Project": project})
+    responses["ec2", "describe-addresses"]["Addresses"] = [
+        {
+            "AllocationId": "eipalloc-test",
+            "Tags": [{"Key": k, "Value": v} for k, v in tags.items()],
+        }
+    ]
+    if fails:
+        with pytest.raises(SystemExit, match="1 resource"):
+            leftovers.main()
+    else:
+        leftovers.main()
+    output = capsys.readouterr().out
+    if fails:
+        assert "REMAINS Elastic IP: eipalloc-test" in output
+        assert "OTHER OWNER: eipalloc-test" not in output
+    else:
+        assert "REMAINS" not in output
+        assert "OTHER OWNERS (informational" in output
+        assert (
+            'OTHER OWNER: eipalloc-test {"experiment": "s1", "lab": "agent-runtime"}'
+            in output
+        )
+
+
+def test_T_D1_05_tag_index_requires_live_resource(inventory):
+    leftovers, responses = inventory
+    arn = "arn:aws:elasticloadbalancing:us-east-2:729608197929:targetgroup/custom/123"
+    responses["resourcegroupstaggingapi", "get-resources"]["ResourceTagMappingList"] = [
+        {
+            "ResourceARN": arn,
+            "Tags": [{"Key": "Project", "Value": "mock-workday"}],
+        }
+    ]
+    leftovers.main()
+    responses["elbv2", "describe-target-groups"]["TargetGroups"] = [
+        {"TargetGroupArn": arn}
+    ]
+    with pytest.raises(SystemExit, match="1 resource"):
+        leftovers.main()
+
+
+def test_T_D1_05_tag_inventory_error_fails(inventory):
+    leftovers, responses = inventory
+    del responses["resourcegroupstaggingapi", "get-resources"]
+    with pytest.raises(KeyError):
+        leftovers.main()
+
+
+@pytest.mark.parametrize(
+    "name, fails", [("mock-workday-dev-orphan", True), ("mock-workdayish", False)]
+)
+def test_T_D1_05_name_tag_boundary(inventory, name, fails):
+    leftovers, responses = inventory
+    responses["ec2", "describe-volumes"]["Volumes"] = [
+        {
+            "VolumeId": "vol-test",
+            "Tags": [{"Key": "Name", "Value": name}],
+        }
+    ]
+    if fails:
+        with pytest.raises(SystemExit, match="1 resource"):
+            leftovers.main()
+    else:
+        leftovers.main()
+
+
+def test_T_M3_DOWN_01_tagged_bucket_outside_prefix_fails(inventory):
+    leftovers, responses = inventory
+    responses["s3api", "list-buckets"]["Buckets"] = [{"Name": "custom-bucket"}]
+    responses["s3api", "list-object-versions"] = {}
+    responses["s3api", "list-multipart-uploads"] = {}
+    responses["resourcegroupstaggingapi", "get-resources"]["ResourceTagMappingList"] = [
+        {
+            "ResourceARN": "arn:aws:s3:::custom-bucket",
+            "Tags": [{"Key": "Project", "Value": "mock-workday"}],
+        }
+    ]
+    with pytest.raises(SystemExit, match="1 resource"):
+        leftovers.main()
+
+
+def test_T_D1_05_other_owner_log_tags_and_read_error(inventory, capsys):
+    leftovers, responses = inventory
+    responses["logs", "describe-log-groups"]["logGroups"] = [
+        {"logGroupName": "/lab/s1/dns"}
+    ]
+    responses["logs", "list-tags-log-group"] = {
+        "tags": {"lab": "agent-runtime", "experiment": "s1"}
+    }
+    leftovers.main()
+    assert '"experiment": "s1"' in capsys.readouterr().out
+    del responses["logs", "list-tags-log-group"]
+    with pytest.raises(KeyError):
+        leftovers.main()
+
+
+def test_T_D1_05_native_other_owner_tags_without_index(inventory, capsys):
+    leftovers, responses = inventory
+    responses["iam", "list-roles"]["Roles"] = [
+        {
+            "RoleName": "lab-s1-controller",
+            "Arn": "arn:aws:iam::729608197929:role/lab-s1-controller",
+        }
+    ]
+    responses["iam", "list-role-tags"] = {
+        "Tags": [
+            {"Key": "lab", "Value": "agent-runtime"},
+            {"Key": "experiment", "Value": "s1"},
+        ]
+    }
+    leftovers.main()
+    output = capsys.readouterr().out
+    assert (
+        'OTHER OWNER: arn:aws:iam::729608197929:role/lab-s1-controller {"experiment": "s1", "lab": "agent-runtime"}'
+        in output
+    )
+    assert "REMAINS" not in output

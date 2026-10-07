@@ -225,11 +225,12 @@ vary; see [Fargate](https://aws.amazon.com/fargate/pricing/),
 study sessions.** RDS provisioning may take several minutes. Destroying the
 service retains the registry and platform; image/state storage can still incur
 small charges. The leftover checker scans the dev account for the listed resource
-classes (including untagged resources and logs in `us-east-1`), so unrelated
-projects may also be reported. Service-specific list/describe calls determine
+classes (including untagged resources with Mock Workday names and logs in
+`us-east-1`). It fails only for Mock Workday-owned leftovers or inventory errors;
+other `lab=agent-runtime` owners appear separately with their tags. Service-specific list/describe calls determine
 failure; tag-only findings are informational warnings and do not fail the check.
-STOPPED tasks and task definitions do not count as billable leftovers. Target
-groups, ECS service metadata and unattached ENIs are informational inventory.
+STOPPED tasks and task definitions do not count as active leftovers. Owned target
+groups, ECS clusters/services and unattached ENIs still fail the check.
 It never deletes anything automatically.
 
 
@@ -458,8 +459,9 @@ operator /32, image tag and certificate plan before applying.
 The approved `5fa0502` deployment and validation are recorded in
 [the live validation report](docs/m3-validation.md), including failures and the
 consumer-dependent checks that remain unverified. Mock Workday service teardown
-succeeded, but the clean-inventory gate is blocked by five runtime/platform-owned
-resources reported by the account-wide checker; they were left untouched.
+succeeded. Checkpoint 4 is accepted after the approved owner-scoped inventory
+passed; live S1 resources and permanent platform logs are informational other
+owners and were left untouched. Six KMS keys remain scheduled for deletion.
 `make aws-up` (using the
 existing `DOCKER_CONTEXT=colima-s1-builder`) ran TLS enrollment/storage, bootstrap,
 all three bulk imports and disabled-ASU seeding; `make aws-smoke` passed.
