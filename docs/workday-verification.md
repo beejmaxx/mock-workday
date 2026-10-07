@@ -23,7 +23,7 @@
 | 6 | Integration system users, integration security groups (constrained and unconstrained), and OAuth API clients scoped to functional areas, with refresh tokens tied to an account | **Verified (secondary)**; partly primary | Keep as modeled; delegation stays lab policy |
 | 7 | Business-process history and object audit trails are distinct | **Verified** | Keep three audit records; the authorization-decision audit is lab policy |
 | 8 | REST responses reference objects as `{id, descriptor, href}` | **Verified (secondary)** | Keep. Pagination differs; see below. |
-| — | Domain policies use View/Modify for tasks and reports, and Get/Put for integrations | **Verified** | Keep as modeled |
+| — | Domain policies use View/Modify for tasks and reports, and Get/Put for integrations | **Verified** | Simplified: the mock uses View/Modify for all REST callers (spec §4.1) |
 
 ## Findings
 

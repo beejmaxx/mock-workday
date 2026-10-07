@@ -138,7 +138,7 @@ integration_group_members(group_id, account_id, tenant_id)
 integration_group_orgs(group_id, org_id, tenant_id)
     -- constrained groups: listed orgs plus all subordinates
 
-domain_grants(tenant_id, domain, group_id, permission VIEW|MODIFY|GET|PUT)
+domain_grants(tenant_id, domain, group_id, permission VIEW|MODIFY)
 
 api_clients(id, tenant_id, client_id text, secret_hash, name,
             scope_ceiling text[], isu_account_id null, disabled bool)
@@ -235,6 +235,10 @@ Ordered: `PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED`.
    - has `expires_at > now`.
 
    **This check runs on every request**, so revocation takes effect immediately.
+8. **Effective scopes are recomputed on every request** from current state, never taken from the token alone:
+   - delegated: `token.scope ∩ client.scope_ceiling (current) ∩ grant.scopes (current)`;
+   - ISU: `token.scope ∩ client.scope_ceiling (current)`;
+   - direct human: unrestricted (`None`).
 
 The result is a `Principal`:
 
@@ -247,7 +251,7 @@ class Principal:
     worker_id: UUID | None         # human and delegated
     client_id: str | None
     grant_id: UUID | None
-    scopes: frozenset[str] | None  # None = unrestricted (direct human)
+    scopes: frozenset[str] | None  # effective scopes per §3.3 step 8; None = direct human
 ```
 
 ### 3.4 Delegation grants [Lab]
@@ -282,10 +286,8 @@ class Principal:
   - `DOC_TENANT` (tenant-wide documents; minimum classification `INTERNAL`)
   - `DOC_ORG` (organization documents; minimum `CONFIDENTIAL`)
   - `DOC_WORKER` (worker documents; minimum `CONFIDENTIAL`)
-- **Permission families:**
-  - Human and delegated principals need `VIEW` (read) or `MODIFY` (write).
-  - ISU principals need `GET` (read) or `PUT` (write) [WD].
-  - `MODIFY` implies `VIEW`, and `PUT` implies `GET`.
+- **Permissions:** every caller (human, delegated, or ISU) needs `VIEW` to read and `MODIFY` to write. `MODIFY` implies `VIEW`.
+  - [Lab simplification] Workday separates View/Modify (tasks and reports) from Get/Put (integration operations) [WD]. Whether Workday's REST API checks Get/Put is not established, and the distinction adds nothing to the runtime problem, so the mock uses View/Modify for all REST callers.
 
 ### 4.2 Reach [WD semantics, Lab choices per group]
 
@@ -351,9 +353,7 @@ def memberships(p: Principal, target: Target, now) -> list[Membership]:
 
 ```python
 def authorize(p, action: READ|WRITE, domain, target, now) -> Decision:
-    need = {("human", READ): VIEW, ("human", WRITE): MODIFY,
-            ("delegated", READ): VIEW, ("delegated", WRITE): MODIFY,
-            ("isu", READ): GET, ("isu", WRITE): PUT}[(p.kind, action)]
+    need = VIEW if action == READ else MODIFY
     if p.scopes is not None and scope_for(domain) not in p.scopes:
         return deny("SCOPE")
     for mem in memberships(p, target, now):          # deterministic order
@@ -747,8 +747,8 @@ Faults apply to matching requests until `count` is exhausted.
 
 | Domain | Grants |
 |---|---|
-| WORKER_BASIC | Self VIEW; Manager VIEW; HR Partner MODIFY; Compensation Partner VIEW; Directory Reader GET; Engineering Reader GET |
-| WORKER_ORGANIZATIONS | Self VIEW; Manager VIEW; HR Partner MODIFY; Directory Reader GET |
+| WORKER_BASIC | Self VIEW; Manager VIEW; HR Partner MODIFY; Compensation Partner VIEW; Directory Reader VIEW; Engineering Reader VIEW |
+| WORKER_ORGANIZATIONS | Self VIEW; Manager VIEW; HR Partner MODIFY; Directory Reader VIEW |
 | WORKER_COMPENSATION | Self VIEW; HR Partner VIEW; Compensation Partner MODIFY |
 | ABSENCE | Self MODIFY; Manager VIEW; HR Partner VIEW |
 | DOC_TENANT | All Employees VIEW |
@@ -870,7 +870,7 @@ Test IDs are stable references for the runtime project. A **(D)** marks a delega
 | T-D-04 | Carol creates a `DOC_ORG` document on Engineering with classification INTERNAL | 422 (below minimum) |
 | T-D-05 | Bob creates a `DOC_WORKER` document for himself | 403 (Self has VIEW only) |
 | T-D-06 | Exfiltration path: Carol reads Bob's compensation, then creates a `DOC_ORG` document containing it; Alice reads it | all 200 (documented composition gap) |
-| T-D-07 | Confidential document read with audit failure injected | 503, no content returned |
+| T-D-07 | Confidential document read while audit writes fail. The test simulates the failure at the database: as `mw_owner`, `REVOKE INSERT ON audit_authz FROM mw_app`, run the read, then restore the grant. The HTTP fault API stays in M2. | 503, no content returned |
 
 ### M1: Pagination and rate limiting
 
